@@ -1,0 +1,6 @@
+# 本地开发产物 / 敏感文件不入库
+node_modules/
+.wrangler/
+*.log
+.env
+*.bak
