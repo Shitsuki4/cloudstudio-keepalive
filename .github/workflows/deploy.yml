@@ -116,7 +116,7 @@ jobs:
             echo "SSH_AUTH=password" >> "$GITHUB_ENV"
           fi
 
-      - name: 解析网关真实 IP(runner 本地 DNS 查不到腾讯 CNAME,走 DoH)
+      - name: 解析网关真实 IP(runner 本地 DNS 查不到腾讯 CNAME,走 DoH,写 /etc/hosts)
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
         run: |
@@ -124,23 +124,22 @@ jobs:
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['data'] for a in d['Answer'] if a['type']==1))")
           echo "gateway $SSH_HOST -> $IP"
           if [ -z "$IP" ]; then echo "DoH 解析失败"; exit 1; fi
-          echo "SSH_RESOLVE=--resolve ${SSH_HOST}:22:${IP}" >> "$GITHUB_ENV"
+          echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
 
       - name: 上传脚本 + 写 preview.yml 启动链
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          SSH_RESOLVE: ${{ env.SSH_RESOLVE }}
           APP_DIR: /workspace/programming-language-demo
         run: |
           ssh_run() {
-            if [ "$SSH_AUTH" = "key" ]; then ssh $SSH_RESOLVE -o ConnectTimeout=30 "$SSH_USER@$SSH_HOST" "$1"
-            else sshpass -p "$SSH_PASSWORD" ssh $SSH_RESOLVE -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive,password "$SSH_USER@$SSH_HOST" "$1"; fi
+            if [ "$SSH_AUTH" = "key" ]; then ssh -o ConnectTimeout=30 "$SSH_USER@$SSH_HOST" "$1"
+            else sshpass -p "$SSH_PASSWORD" ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive,password "$SSH_USER@$SSH_HOST" "$1"; fi
           }
           scp_file() { # scp 对 CloudStudio 网关必须加 -O(legacy 协议)
-            if [ "$SSH_AUTH" = "key" ]; then scp -O $SSH_RESOLVE "$1" "$SSH_USER@$SSH_HOST:$2"
-            else sshpass -p "$SSH_PASSWORD" scp -O $SSH_RESOLVE -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; fi
+            if [ "$SSH_AUTH" = "key" ]; then scp -O "$1" "$SSH_USER@$SSH_HOST:$2"
+            else sshpass -p "$SSH_PASSWORD" scp -O -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; fi
           }
 
           echo "[1/4] 建目录"
