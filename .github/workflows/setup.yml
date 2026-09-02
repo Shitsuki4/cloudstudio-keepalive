@@ -1,57 +1,51 @@
 name: Keepalive Setup
 
-# 一次性引导:校验 Secrets 是否齐全,提示补全,然后触发主部署
+# 一次性引导:校验 Secrets,测试腾讯云密钥/CF Global Key 可用性,然后触发主部署
 on:
   workflow_dispatch:
-    inputs:
-      skip_vps:
-        description: "跳过 VPS 部署(只部署 Cloudflare Worker)"
-        type: boolean
-        default: false
 
 jobs:
   check-secrets:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: 校验必需 Secrets
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
           KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
-          FOREVER_TOKEN: ${{ secrets.FOREVER_TOKEN }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
         run: |
           missing=0
-          for v in CF_API_TOKEN CF_ZONE_ID CF_ACCOUNT_ID KEEPALIVE_DOMAIN FOREVER_TOKEN; do
+          for v in CF_AUTH_EMAIL CF_GLOBAL_API_KEY KEEPALIVE_DOMAIN TENCENT_SECRET_ID TENCENT_SECRET_KEY; do
             if [ -z "${!v}" ]; then echo "❌ 缺少 Secret: $v"; missing=1; else echo "✅ $v 已配置"; fi
           done
-          if [ "${{ inputs.skip_vps }}" != "true" ]; then
-            for v in SSH_HOST SSH_USER; do
-              if [ -z "${!v}" ]; then echo "❌ 缺少 Secret: $v (VPS 部署需要)"; missing=1; else echo "✅ $v 已配置"; fi
-            done
-          fi
           if [ "$missing" = "1" ]; then
             echo ""
             echo "👉 请到 Settings → Secrets and variables → Actions 补全后重新运行"
             exit 1
           fi
 
-      - name: 校验 CF Token 有效性
+      - name: 测试腾讯云密钥 + 发现工作区
+        id: discover
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-        run: |
-          code=$(curl -s -o /tmp/verify.json -w "%{http_code}" \
-            -H "Authorization: Bearer $CF_API_TOKEN" \
-            https://api.cloudflare.com/client/v4/user/tokens/verify)
-          echo "verify HTTP $code: $(cat /tmp/verify.json)"
-          [ "$code" = "200" ] || { echo "❌ CF_API_TOKEN 无效"; exit 1; }
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/tc-discover.py
 
-  trigger-deploy:
-    needs: check-secrets
-    runs-on: ubuntu-latest
-    steps:
+      - name: 测试 CF Global Key(找 zone)
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+        run: |
+          zones=$(curl -s -H "X-Auth-Email: $CF_AUTH_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_API_KEY" \
+            "https://api.cloudflare.com/client/v4/zones?per_page=50")
+          ok=$(echo "$zones" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('success'));print(' '.join(z['name'] for z in d.get('result') or []))")
+          echo "$ok"
+          echo "$ok" | head -1 | grep -q True || { echo "❌ Global Key 无效"; exit 1; }
+
       - name: 触发主部署
         uses: actions/github-script@v7
         with:
@@ -60,7 +54,6 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               workflow_id: 'deploy.yml',
-              ref: context.ref,
-              inputs: { skip_vps: '${{ inputs.skip_vps }}' }
+              ref: context.ref
             });
-            console.log('deploy.yml 已触发,到 Actions → Keepalive Deploy 查看进度');
+            console.log('✅ deploy.yml 已触发');
