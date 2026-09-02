@@ -44,10 +44,10 @@
    | Secret | 说明 |
    |---|---|
    | `BROWSERLESS_KEY` | browserless.io key,凌晨重启后自动打开网页 IDE 触发 preview.yml |
-   | `SSH_HOST` | CloudStudio SSH 网关域名,如 `<space>.xxxx.ssh.cloudstudio.work` |
-   | `SSH_USER` | 网关用户名,形如 `<hash>-<spaceKey>` |
-   | `SSH_PASSWORD` | 工作区 root 密码(没配密钥时用) |
-   | `SSH_PRIVATE_KEY` | SSH 私钥(优先于密码) |
+   | `SSH_HOST` | CloudStudio SSH 网关域名,如 `<spaceKey>.<cluster>.ssh.cloudstudio.work`(网页 IDE 的 SSH 面板里复制) |
+   | `SSH_USER` | 网关用户名,形如 `<accessToken>-<spaceKey>`(同上,网页面板复制) |
+
+   > **SSH 无需密码也无需密钥**:accessToken 本身嵌在用户名里就是凭证,网关的 keyboard-interactive 是零提示放行。所以 `SSH_HOST` + `SSH_USER` 两个 Secret 就够。
 
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
 4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
@@ -86,4 +86,6 @@ vps/
 - **无特权容器**:跑不了 docker,服务全部裸跑二进制
 - **满载会被回收**:32 核满载基准测试两次触发容器重建,负载控制在 8 核内
 - **只有 `/workspace` 跨重建幸存**:其余目录(/opt /etc /usr/local/bin)重建即清,靠 restore-assets.sh 重建软链
-- SSH 网关是 keyboard-interactive,**不能加 BatchMode**;scp 要加 `-O`
+- SSH 网关是 keyboard-interactive 且**免密**(accessToken 即凭证),**不能加 BatchMode**;scp 要加 `-O`
+- 腾讯云 API 短时间高频调用会临时限流,错误伪装成 `AuthFailure.SignatureFailure`——过几分钟自愈,别去改签名代码
+- 新工作区 `/workspace` 是空的:vps/ 脚本对缺失资产做了跳过守卫,应用就位后 selfheal 每分钟自动补拉起
