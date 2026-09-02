@@ -1,0 +1,17 @@
+name: keepalive
+on: [push]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: worker JS 语法检查
+        run: node --check worker/start.js
+      - name: bash 语法检查
+        run: |
+          for f in vps/*.sh .github/scripts/*.sh; do
+            bash -n "$f" && echo "OK $f"
+          done
