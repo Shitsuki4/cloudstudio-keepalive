@@ -91,6 +91,7 @@ jobs:
         env:
           CF_API_TOKEN: ${{ steps.mint.outputs.token }}
           CF_ZONE_ID: ${{ steps.mint.outputs.zone_id }}
+          CF_ACCOUNT_ID: ${{ steps.mint.outputs.account_id }}
           KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
         run: bash .github/scripts/bind-route.sh
 
