@@ -3,6 +3,11 @@
 # preview.yml autoOpen 首个调用;幂等,可重复执行
 set -e
 WS=/workspace/programming-language-demo/apps
+# 新工作区:资产未就位时不报错,等 /workspace 布置好后由 selfheal/下次 autoOpen 补链
+if [ ! -d $WS ]; then
+  echo "restore-assets: $WS 不存在,跳过(新工作区)"
+  exit 0
+fi
 mkdir -p /etc/cloudflared /etc/config /opt /var/log
 
 # 二进制软链(仅当缺失或不是软链时替换)
