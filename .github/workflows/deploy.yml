@@ -32,7 +32,8 @@ jobs:
         id: sshcheck
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: echo "has_ssh=$([ -n "$SSH_HOST" ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
+          SSH_USER: ${{ secrets.SSH_USER }}
+        run: echo "has_ssh=$([ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
 
       # ── 0. 用腾讯云密钥自动发现 spaceKey ──
       - name: 自动发现工作区 spaceKey
@@ -126,21 +127,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 准备 SSH(密钥优先,回退密码)
-        env:
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-        run: |
-          if [ -n "$SSH_PRIVATE_KEY" ]; then
-            mkdir -p ~/.ssh && chmod 700 ~/.ssh
-            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
-            ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
-            echo "SSH_AUTH=key" >> "$GITHUB_ENV"
-          else
-            sudo apt-get install -y -qq sshpass > /dev/null
-            echo "SSH_AUTH=password" >> "$GITHUB_ENV"
-          fi
-
+      # CloudStudio 网关:accessToken 嵌在用户名里即凭证,keyboard-interactive 零提示放行
+      # 无需密码/密钥;但绝不能加 BatchMode(会禁用交互通道直接失败)
       - name: 解析网关真实 IP(runner 本地 DNS 查不到腾讯 CNAME,走 DoH,写 /etc/hosts)
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
@@ -155,31 +143,24 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          APP_DIR: /workspace/programming-language-demo
         run: |
-          ssh_run() {
-            if [ "$SSH_AUTH" = "key" ]; then ssh -o ConnectTimeout=30 "$SSH_USER@$SSH_HOST" "$1"
-            else sshpass -p "$SSH_PASSWORD" ssh -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive,password "$SSH_USER@$SSH_HOST" "$1"; fi
-          }
-          scp_file() { # scp 对 CloudStudio 网关必须加 -O(legacy 协议)
-            if [ "$SSH_AUTH" = "key" ]; then scp -O "$1" "$SSH_USER@$SSH_HOST:$2"
-            else sshpass -p "$SSH_PASSWORD" scp -O -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; fi
-          }
+          SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
+          ssh_run() { ssh $SSHOPT "$SSH_USER@$SSH_HOST" "$1"; }
+          scp_file() { scp -O -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; }
 
           echo "[1/4] 建目录"
-          ssh_run "mkdir -p $APP_DIR/apps/new-api $APP_DIR/.vscode /tmp/kdeploy"
+          ssh_run "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/programming-language-demo/.vscode /tmp/kdeploy"
 
           echo "[2/4] 上传 vps/ 脚本"
           for f in restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh; do
-            scp_file "vps/$f" "$APP_DIR/apps/new-api/$f" || exit 1
+            scp_file "vps/$f" "/workspace/programming-language-demo/apps/new-api/$f" || exit 1
           done
 
           echo "[3/4] 写 preview.yml(autoOpen 启动链)"
-          scp_file "vps/preview.yml" "$APP_DIR/.vscode/preview.yml" || exit 1
+          scp_file "vps/preview.yml" "/workspace/programming-language-demo/.vscode/preview.yml" || exit 1
 
           echo "[4/4] 立即执行启动链(不等凌晨 4 点)"
-          ssh_run "cd $APP_DIR/apps/new-api && chmod +x *.sh && bash restore-assets.sh && bash boot-all.sh && bash tunnel-start.sh && (bash probe-start.sh || true) && bash selfheal-start.sh; sleep 8; echo '--- 进程 ---'; ps aux | grep -E 'new-api|cloudflared|cf-probe' | grep -v grep | awk '{print \$11}' | sort | uniq -c; echo '--- 本地 3000 ---'; curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:3000/ || true"
+          ssh_run "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh && bash restore-assets.sh && bash boot-all.sh && bash tunnel-start.sh && (bash probe-start.sh || true) && bash selfheal-start.sh; sleep 8; echo '--- 进程 ---'; ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; echo '--- 本地 3000 ---'; curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:3000/ || true"
 
   summary:
     name: 部署摘要
