@@ -1,10 +1,7 @@
-// CloudStudio 免费工作区保活 Worker
-// 所有敏感参数通过 Cloudflare Worker 的环境变量(Secrets/Vars)注入:
-//   FOREVER_TOKEN_<SPACEKEY 大写>  — 空间对应的长效 token(几十年有效期),省 TC3 签名
-//   TENCENT_SECRET_ID / TENCENT_SECRET_KEY — 腾讯云 API 密钥(没有 forever token 时才需要)
-//   BROWSERLESS_KEY                — browserless.io key,用于凌晨重启后打开网页 IDE 触发 preview.yml
-//   KEEPALIVE_HOST                 — 本 worker 的入口域名(必须是自定义域,workers.dev 在国内被污染)
-// 非敏感配置用 Vars:  SPACE_KEYS(逗号分隔,如 "udfxel,abc123")
+// CloudStudio 免费工作区保活 Worker(腾讯云 SecretId/Key TC3 签名版)
+// Secrets(必需): TENCENT_SECRET_ID / TENCENT_SECRET_KEY / KEEPALIVE_HOST
+// Secret(可选): BROWSERLESS_KEY — 凌晨重启后打开网页 IDE 触发 preview.yml
+// Vars: SPACE_KEYS 逗号分隔的工作区 key(留空则只有 WORKER_DEFAULT_SPACE_KEY)
 
 // 访问网页 IDE,等待终端加载完成 -> 触发 preview.yml autoOpen 启动应用
 const openIde = (spaceKey, token, browserlessKey) => {
@@ -41,7 +38,7 @@ async function scheduled(event, env, ctx) {
     spaceKeys.map((spaceKey) => fetchHandler(`${env.KEEPALIVE_HOST}/heart/${spaceKey}`, env, ctx))
   );
 
-  // 凌晨 4 点(北京时间)重启工作区并打开网页 IDE 拉起应用
+  // 凌晨 4 点(北京时间)重启工作区并打开网页 IDE 拉起应用(需 BROWSERLESS_KEY)
   if (beijingHour !== 4) return;
   for (const [index, spaceKey] of spaceKeys.entries()) {
     // 4:00 4:03 4:06 ... 间隔开,避免同时启动
@@ -86,10 +83,13 @@ async function fetchHandler(request, env, ctx) {
 
     // 启动应用:开机后需要打开网页 IDE 做初始化,触发 .vscode/preview.yml 的 autoOpen
     if (action === "RunWorkspace") {
-      const tokenRes = await runTencentCloudAPI(env, spaceKey, "CreateWorkspaceToken");
-      const token = tokenRes.Response.Token;
-      const res = await openIde(spaceKey, token, env.BROWSERLESS_KEY);
-      console.log(await res.text());
+      if (!env.BROWSERLESS_KEY) {
+        console.log("未配置 BROWSERLESS_KEY,跳过打开 IDE(需自行触发 preview.yml)");
+      } else {
+        const tokenRes = await runTencentCloudAPI(env, spaceKey, "CreateWorkspaceToken");
+        const res = await openIde(spaceKey, tokenRes.Response.Token, env.BROWSERLESS_KEY);
+        console.log(await res.text());
+      }
     }
 
     if (action === "CreateWorkspaceToken") {
@@ -119,10 +119,11 @@ async function fetchHandler(request, env, ctx) {
 }
 
 function getSpaceKeys(env) {
-  return (env.SPACE_KEYS || "")
+  const keys = (env.SPACE_KEYS || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
+  return keys.length ? keys : [env.WORKER_DEFAULT_SPACE_KEY].filter(Boolean);
 }
 
 function json(data, status = 200) {
@@ -132,7 +133,7 @@ function json(data, status = 200) {
   });
 }
 
-// --- 腾讯云 TC3 签名工具 ---
+// --- 腾讯云 TC3 签名 ---
 
 async function getHash(message) {
   const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(message));
@@ -167,16 +168,8 @@ function getDate(timestamp) {
 }
 
 async function runTencentCloudAPI(env, spaceKey, action = "RunWorkspace") {
-  // 优先用 forever token(免签名、免 API 密钥)
-  const foreverToken = env[`FOREVER_TOKEN_${spaceKey.toUpperCase()}`];
-  if (foreverToken && action === "CreateWorkspaceToken") {
-    return await Promise.resolve({ Response: { Token: foreverToken } });
-  }
-
   if (!env.TENCENT_SECRET_ID || !env.TENCENT_SECRET_KEY) {
-    throw new Error(
-      `Missing token: set Secret FOREVER_TOKEN_${spaceKey.toUpperCase()} or TENCENT_SECRET_ID/KEY`
-    );
+    throw new Error("Missing TENCENT_SECRET_ID / TENCENT_SECRET_KEY");
   }
 
   const host = "cloudstudio.tencentcloudapi.com";
@@ -215,8 +208,10 @@ async function runTencentCloudAPI(env, spaceKey, action = "RunWorkspace") {
     body: payload,
   });
 
-  if (!fetchResponse.ok) {
-    throw new Error(`API Error: ${fetchResponse.status} ${await fetchResponse.text()}`);
+  const data = await fetchResponse.json().catch(() => null);
+  if (!fetchResponse.ok || (data && data.Response && data.Response.Error)) {
+    const err = data && data.Response && data.Response.Error;
+    throw new Error(`API Error: ${fetchResponse.status} ${err ? err.Code + " " + err.Message : ""}`);
   }
-  return await fetchResponse.json();
+  return data;
 }
