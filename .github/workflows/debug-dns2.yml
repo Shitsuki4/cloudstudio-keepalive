@@ -1,0 +1,11 @@
+name: debug-dns2
+on: workflow_dispatch
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          # 直接 TCP 测 42.192.26.75:22 通不通
+          timeout 10 bash -c 'cat < /dev/null > /dev/tcp/42.192.26.75/22' && echo "TCP22: OK" || echo "TCP22: FAIL"
+          # 用 --resolve 直连 ssh banner
+          ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=none --resolve udfxel.88q5n6vn.ssh.cloudstudio.work:22:42.192.26.75 nonexistent@udfxel.88q5n6vn.ssh.cloudstudio.work 2>&1 | head -3 || true
