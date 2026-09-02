@@ -23,9 +23,26 @@ jobs:
     name: Cloudflare Worker + 自定义域路由
     runs-on: ubuntu-latest
     outputs:
-      keepalive_host: ${{ steps.host.outputs.host }}
+      space_first: ${{ steps.discover.outputs.first }}
     steps:
       - uses: actions/checkout@v4
+
+      # ── 0. 用腾讯云密钥自动发现 spaceKey ──
+      - name: 自动发现工作区 spaceKey
+        id: discover
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/tc-discover.py
+
+      # ── 1. Global API Key → 铸临时 token + 自动发现 account/zone ──
+      - name: 铸临时 CF token(Global Key 方式)
+        id: mint
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+        run: python3 .github/scripts/cf-token.py
 
       - name: 解析入口域名
         id: host
@@ -36,7 +53,7 @@ jobs:
       - name: 写入 wrangler vars
         working-directory: worker
         env:
-          SPACE_KEYS: ${{ vars.SPACE_KEYS || 'udfxel' }}
+          SPACE_KEYS: ${{ steps.discover.outputs.space_keys }}
           KEEPALIVE_HOST: ${{ steps.host.outputs.host }}
         run: |
           cat >> wrangler.toml <<EOF
@@ -48,54 +65,56 @@ jobs:
       - name: 部署 Worker
         working-directory: worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.mint.outputs.token }}
         run: npx --yes wrangler@latest deploy
 
-      - name: 写入 Secrets(forever token / browserless / 腾讯云密钥)
+      - name: 写入 Worker Secrets(腾讯云密钥)
         working-directory: worker
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
-          SPACE_KEYS: ${{ vars.SPACE_KEYS || 'udfxel' }}
-          KEEPALIVE_HOST: ${{ steps.host.outputs.host }}
-          FOREVER_TOKEN: ${{ secrets.FOREVER_TOKEN }}
-          BROWSERLESS_KEY: ${{ secrets.BROWSERLESS_KEY }}
+          CLOUDFLARE_API_TOKEN: ${{ steps.mint.outputs.token }}
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          BROWSERLESS_KEY: ${{ secrets.BROWSERLESS_KEY }}
         run: |
-          first=$(echo "$SPACE_KEYS" | cut -d, -f1 | tr '[:lower:]' '[:upper:]')
-          echo -n "$FOREVER_TOKEN" | npx --yes wrangler@latest secret put "FOREVER_TOKEN_${first}"
-          # 多空间:为每个 spaceKey 复用同一个 token 的用户,自行加 secret put FOREVER_TOKEN_<KEY>
+          echo -n "$TENCENT_SECRET_ID"  | npx --yes wrangler@latest secret put TENCENT_SECRET_ID
+          echo -n "$TENCENT_SECRET_KEY" | npx --yes wrangler@latest secret put TENCENT_SECRET_KEY
           [ -n "$BROWSERLESS_KEY" ] && echo -n "$BROWSERLESS_KEY" | npx --yes wrangler@latest secret put BROWSERLESS_KEY || true
-          [ -n "$TENCENT_SECRET_ID" ] && echo -n "$TENCENT_SECRET_ID" | npx --yes wrangler@latest secret put TENCENT_SECRET_ID || true
-          [ -n "$TENCENT_SECRET_KEY" ] && echo -n "$TENCENT_SECRET_KEY" | npx --yes wrangler@latest secret put TENCENT_SECRET_KEY || true
 
       - name: 绑定自定义域路由(workers.dev 被污染,必须自定义域)
         env:
-          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
-          CF_ZONE_ID: ${{ secrets.CF_ZONE_ID }}
-          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ steps.mint.outputs.token }}
+          CF_ZONE_ID: ${{ steps.mint.outputs.zone_id }}
           KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
-        run: |
-          bash .github/scripts/bind-route.sh
+        run: bash .github/scripts/bind-route.sh
 
-      - name: 验证心跳入口
+      - name: 验证心跳入口(TC3 签名)
         env:
           HOST: ${{ steps.host.outputs.host }}
-          SPACE_KEYS: ${{ vars.SPACE_KEYS || 'udfxel' }}
+          SPACE: ${{ steps.discover.outputs.first }}
         run: |
-          first=$(echo "$SPACE_KEYS" | cut -d, -f1)
-          echo "--- GET $HOST/heart/$first ---"
-          code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 30 "$HOST/heart/$first")
+          echo "--- GET $HOST/heart/$SPACE ---"
+          code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 45 "$HOST/heart/$SPACE")
           echo "HTTP $code"; head -c 400 /tmp/heart.json; echo
-          if [ "$code" != "200" ]; then echo "⚠️ 心跳返回非 200,检查 FOREVER_TOKEN 是否有效"; exit 1; fi
+          if [ "$code" != "200" ]; then echo "❌ 心跳失败:检查 TENCENT_SECRET_ID/KEY 与 spaceKey 是否匹配"; exit 1; fi
+
+      - name: 清理临时 token
+        if: always()
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+          TOKEN_ID: ${{ steps.mint.outputs.token_id }}
+        run: |
+          [ -n "$TOKEN_ID" ] || { echo "no token to clean"; exit 0; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            -H "X-Auth-Email: $CF_AUTH_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_API_KEY" \
+            "https://api.cloudflare.com/client/v4/user/tokens/$TOKEN_ID")
+          echo "delete temp token: HTTP $code"
 
   deploy-vps:
-    name: VPS 启动链 + preview.yml
+    name: VPS 启动链 + preview.yml(可选)
     runs-on: ubuntu-latest
     needs: deploy-worker
-    if: ${{ inputs.skip_vps != true }}
+    if: ${{ inputs.skip_vps != true && secrets.SSH_HOST != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -103,8 +122,6 @@ jobs:
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           if [ -n "$SSH_PRIVATE_KEY" ]; then
             mkdir -p ~/.ssh && chmod 700 ~/.ssh
@@ -169,4 +186,18 @@ jobs:
           echo "| 步骤 | 状态 |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Cloudflare Worker | ${{ needs.deploy-worker.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| VPS 启动链 | ${{ needs.deploy-vps.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| VPS 启动链 | ${{ needs.deploy-vps.result == 'skipped' && '跳过(未配置 SSH)' || needs.deploy-vps.result }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup-summary:
+    name: 说明
+    runs-on: ubuntu-latest
+    needs: [deploy-worker]
+    if: always()
+    steps:
+      - run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## 说明
+          - 部署用的临时 CF token 已在部署后自动删除,只留 Global API Key 作为长期凭证
+          - spaceKey 由腾讯云密钥调 DescribeWorkspaces 自动发现,无需手填
+          - VPS 部署是可选的:Settings 里没有 SSH_HOST 就自动跳过
+          EOF
