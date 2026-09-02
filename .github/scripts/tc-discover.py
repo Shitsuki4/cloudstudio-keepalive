@@ -57,9 +57,10 @@ except Exception as e:
 if d.get("Response", {}).get("Error"):
     print("TencentCloud Error:", d["Response"]["Error"]); sys.exit(1)
 
-rows = d["Response"].get("WorkspaceList") or d["Response"].get("Data") or []
+rows = d["Response"].get("Data") or d["Response"].get("WorkspaceList") or []
 if rows and isinstance(rows, dict): rows = rows.get("WorkspaceList", [])
-keys = [w.get("Name") or w.get("SpaceKey") for w in rows]
+# 注意:Name 是工作区显示名(如 "free"),SpaceKey 才是 API 用的真实 key —— 必须优先 SpaceKey
+keys = [w.get("SpaceKey") or w.get("Name") for w in rows]
 print("workspaces:", keys)
 if not keys:
     print("该账号下没有 CloudStudio 工作区——请先到 https://ide.cloud.tencent.com 创建"); sys.exit(1)
