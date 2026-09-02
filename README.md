@@ -8,9 +8,12 @@
 ┌─ Cloudflare Worker(每分钟 cron)────────────────┐
 │  ① /heart/<space>   心跳 → 工作区 evict:false 不回收 │
 │  ② 每天 04:00(北京) RunWorkspace 重启工作区       │
-│  ③ browserless 打开网页 IDE → 触发 preview.yml    │
 └────────────────────┬───────────────────────────┘
-                     ▼ autoOpen
+                     ▼ 容器重建(进程清零,/workspace 幸存)
+┌─ GitHub Actions 每小时(vps-boot.yml,免密 SSH)───┐
+│  同步 vps/ 脚本 + 幂等执行启动链 → 最迟 1h 自动恢复  │
+└────────────────────┬───────────────────────────┘
+                     ▼
 ┌─ CloudStudio 容器(只有 /workspace 跨重建幸存)──────┐
 │  restore-assets.sh  重建软链兼容层                  │
 │  boot-all.sh        new-api(或任意应用) :3000      │
@@ -43,11 +46,10 @@
 
    | Secret | 说明 |
    |---|---|
-   | `BROWSERLESS_KEY` | browserless.io key,凌晨重启后自动打开网页 IDE 触发 preview.yml |
    | `SSH_HOST` | CloudStudio SSH 网关域名,如 `<spaceKey>.<cluster>.ssh.cloudstudio.work`(网页 IDE 的 SSH 面板里复制) |
    | `SSH_USER` | 网关用户名,形如 `<accessToken>-<spaceKey>`(同上,网页面板复制) |
 
-   > **SSH 无需密码也无需密钥**:accessToken 本身嵌在用户名里就是凭证,网关的 keyboard-interactive 是零提示放行。所以 `SSH_HOST` + `SSH_USER` 两个 Secret 就够。
+   > **SSH 无需密码也无需密钥**:accessToken 本身嵌在用户名里就是凭证,网关的 keyboard-interactive 是零提示放行。所以 `SSH_HOST` + `SSH_USER` 两个 Secret 就够。`BROWSERLESS_KEY` 已不需要(打开网页 IDE 的活由每小时免密 SSH Actions 接管)。
 
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
 4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
@@ -56,6 +58,7 @@
 
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
+- **容器重建自愈**:Worker 每天凌晨 4 点重启工作区后,`vps-boot.yml` 每小时免密 SSH 进去同步脚本 + 幂等拉起全部服务(最迟 1h 恢复,无需 browserless)
 - **改代码后再部署**:push `worker/**` 或 `vps/**` 自动触发,或手动 Run workflow
 
 ## 目录结构
@@ -77,6 +80,7 @@ vps/
   scripts/bind-route.sh   DNS A 记录 + workers route 绑定
   workflows/setup.yml     首次引导(校验 → 部署)
   workflows/deploy.yml    主部署(CF Worker + 可选 VPS)
+  workflows/vps-boot.yml  每小时免密 SSH 启动链(容器重建自愈)
 ```
 
 ## 已知坑(都踩过)
