@@ -1,0 +1,11 @@
+name: final-verify
+on: workflow_dispatch
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "--- new worker heartbeat ---"
+          curl -s --max-time 30 -w "\nHTTP %{http_code}\n" https://keepalive.shigatsuki4.eu.org/heart/udfxel
+          echo "--- old worker heartbeat ---"
+          curl -s --max-time 30 -w "\nHTTP %{http_code}\n" https://keepalive.qingjf.eu.org/heart/udfxel
