@@ -13,7 +13,10 @@ def call(method, path, body=None, auth="global"):
         headers = {"X-Auth-Email": email, "X-Auth-Key": gkey}
     else:
         headers = {"Authorization": "Bearer " + auth}
-    data = json.dumps(body).encode() if body is not None else None
+    data = None
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+        data = json.dumps(body).encode()
     req = urllib.request.Request(API + path, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
