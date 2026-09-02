@@ -24,8 +24,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       space_first: ${{ steps.discover.outputs.first }}
+      has_ssh: ${{ steps.sshcheck.outputs.has_ssh }}
     steps:
       - uses: actions/checkout@v4
+
+      - name: 探测是否配置了 SSH(决定 VPS job 是否运行)
+        id: sshcheck
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: echo "has_ssh=$([ -n "$SSH_HOST" ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
 
       # ── 0. 用腾讯云密钥自动发现 spaceKey ──
       - name: 自动发现工作区 spaceKey
@@ -114,9 +121,7 @@ jobs:
     name: VPS 启动链 + preview.yml(可选)
     runs-on: ubuntu-latest
     needs: deploy-worker
-    if: ${{ inputs.skip_vps != true && env.HAS_SSH == '1' }}
-    env:
-      HAS_SSH: ${{ secrets.SSH_HOST != '' && '1' || '0' }}
+    if: ${{ inputs.skip_vps != true && needs.deploy-worker.outputs.has_ssh == '1' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -188,7 +193,7 @@ jobs:
           echo "| 步骤 | 状态 |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Cloudflare Worker | ${{ needs.deploy-worker.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| VPS 启动链 | ${{ needs.deploy-vps.result == 'skipped' && '跳过(未配置 SSH)' || needs.deploy-vps.result }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| VPS 启动链 | ${{ needs.deploy-vps.result == 'skipped' && '跳过(未配置 SSH 或勾了 skip_vps)' || needs.deploy-vps.result }} |" >> "$GITHUB_STEP_SUMMARY"
 
   cleanup-summary:
     name: 说明
