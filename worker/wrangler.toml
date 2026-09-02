@@ -1,0 +1,14 @@
+name = "cloudstudio-keepalive"
+main = "start.js"
+compatibility_date = "2024-12-01"
+# worker scheduled() 自调用 /heart/* 必须开这个兼容标志
+compatibility_flags = ["global_fetch_strictly_public"]
+
+[triggers]
+crons = ["* * * * *"]
+
+# 非敏感 Vars 由 deploy.yml 自动写入:
+#   SPACE_KEYS    逗号分隔的空间 key,如 "udfxel"
+#   KEEPALIVE_HOST  worker 入口域名,如 "https://keepalive.example.com"
+# Secrets 由 deploy.yml 自动写入(FOREVER_TOKEN_* / TENCENT_* / BROWSERLESS_KEY)
+[vars]
