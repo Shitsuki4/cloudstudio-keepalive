@@ -46,19 +46,20 @@ jobs:
           echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
 
           SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
+          # 网关对频繁新建连接不稳:全部文件单连接 tar 管道一次传完,失败重试一次
+          upload() {
+            ssh $SSHOPT "$SSH_USER@$SSH_HOST" "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/.vscode /workspace/programming-language-demo/.vscode /tmp/kdeploy"
+            tar -C vps -cf - restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh preview.yml \
+              | ssh $SSHOPT "$SSH_USER@$SSH_HOST" "tar -C /tmp/kdeploy -xf -"
+            ssh $SSHOPT "$SSH_USER@$SSH_HOST" "install -m755 /tmp/kdeploy/*.sh /workspace/programming-language-demo/apps/new-api/ && install -m644 /tmp/kdeploy/preview.yml /workspace/.vscode/preview.yml && install -m644 /tmp/kdeploy/preview.yml /workspace/programming-language-demo/.vscode/preview.yml"
+          }
+
           ssh_run() { ssh $SSHOPT "$SSH_USER@$SSH_HOST" "$1"; }
-          scp_file() { scp -O -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; }
 
           ssh_run "echo connected" || { echo "SSH 连不上(accessToken 可能已轮换)— 主通道不受影响,提醒更新 SSH_USER"; exit 0; }
 
-          echo "[1/2] 同步脚本"
-          ssh_run "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/.vscode /workspace/programming-language-demo/.vscode"
-          for f in restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh; do
-            scp_file "vps/$f" "/workspace/programming-language-demo/apps/new-api/$f" || exit 1
-          done
-          # preview.yml 两处都放:tty 直开时 workspaceFolders[0]=/workspace,控制台打开项目时是子目录
-          scp_file "vps/preview.yml" "/workspace/.vscode/preview.yml" || exit 1
-          scp_file "vps/preview.yml" "/workspace/programming-language-demo/.vscode/preview.yml" || exit 1
+          echo "[1/2] 同步脚本(单连接)"
+          upload || { echo "首次上传失败,10s 后重试"; sleep 10; upload; }
 
           echo "[2/2] 状态"
           ssh_run "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh && ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; curl -s -o /dev/null -w 'localhost:3000 HTTP %{http_code}\n' --max-time 5 http://localhost:3000/ || true"
