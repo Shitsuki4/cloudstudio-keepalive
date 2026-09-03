@@ -160,10 +160,19 @@ jobs:
         env:
           SSH_HOST: ${{ needs.deploy-worker.outputs.ssh_host }}
         run: |
-          IP=$(curl -s --max-time 20 "https://dns.google/resolve?name=${SSH_HOST}&type=A" \
-            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['data'] for a in d['Answer'] if a['type']==1))")
+          # dns.google 在 runner 上时通时断,准备 3 个 DoH 依次试
+          resolve() {
+            for doh in "https://dns.google/resolve" "https://1.1.1.1/dns-query?Accept=application/dns-json" "https://dns.alidns.com/resolve"; do
+              ip=$(curl -s --max-time 15 "$doh?name=${SSH_HOST}&type=A" 2>/dev/null \
+                | python3 -c "import sys,json
+          d=json.load(sys.stdin)
+          ans=d.get('Answer') or []
+          print(next(a['data'] for a in ans if a['type']==1))" 2>/dev/null) && [ -n "$ip" ] && { echo "$ip"; return; }
+            done
+            return 1
+          }
+          IP=$(resolve) || { echo "全部 DoH 解析失败"; exit 1; }
           echo "gateway $SSH_HOST -> $IP"
-          if [ -z "$IP" ]; then echo "DoH 解析失败"; exit 1; fi
           echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
 
       - name: 上传脚本 + 写 preview.yml 启动链
