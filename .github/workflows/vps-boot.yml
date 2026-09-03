@@ -50,8 +50,19 @@ jobs:
           SSH_USER="${uri%%@*}"; SSH_HOST="${uri##*@}"
           echo "parsed: $SSH_USER@$SSH_HOST"
 
-          IP=$(curl -s --max-time 20 "https://dns.google/resolve?name=${SSH_HOST}&type=A" \
-            | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['data'] for a in d['Answer'] if a['type']==1))")
+          # dns.google 在 runner 上时通时断,3 个 DoH 依次试
+          resolve() {
+            for doh in "https://dns.google/resolve" "https://1.1.1.1/dns-query?Accept=application/dns-json" "https://dns.alidns.com/resolve"; do
+              ip=$(curl -s --max-time 15 "$doh?name=${SSH_HOST}&type=A" 2>/dev/null \
+                | python3 -c "import sys,json
+          d=json.load(sys.stdin)
+          ans=d.get('Answer') or []
+          print(next(a['data'] for a in ans if a['type']==1))" 2>/dev/null) && [ -n "$ip" ] && { echo "$ip"; return; }
+            done
+            return 1
+          }
+          IP=$(resolve) || { echo "DoH 全部解析失败,跳过 SSH 同步(主通道不受影响)"; exit 0; }
+          echo "gateway $SSH_HOST -> $IP"
           echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
 
           SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
