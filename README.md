@@ -10,11 +10,16 @@
 │  ② 每天 04:00(北京) RunWorkspace 重启工作区       │
 └────────────────────┬───────────────────────────┘
                      ▼ 容器重建(进程清零,/workspace 幸存)
-┌─ GitHub Actions 每小时(vps-boot.yml,免密 SSH)───┐
-│  同步 vps/ 脚本 + 幂等执行启动链 → 最迟 1h 自动恢复  │
+┌─ GitHub Actions 每小时(vps-boot.yml)──────────────┐
+│  ① 云 API 铸 workspace token → runner Chrome 打开   │
+│     网页 IDE → preview.yml autoOpen → 启动链         │
+│  ② (可选)免密 SSH 同步脚本 + 直查状态               │
+│  最迟 1h 自动恢复                                    │
 └────────────────────┬───────────────────────────┘
                      ▼
 ┌─ CloudStudio 容器(只有 /workspace 跨重建幸存)──────┐
+│  preview.yml autoOpen(autoOpen 在打开网页 IDE 时    │
+│    自动执行下面的启动链;/workspace/.vscode/ 也要放) │
 │  restore-assets.sh  重建软链兼容层                  │
 │  boot-all.sh        new-api(或任意应用) :3000      │
 │  tunnel-start.sh    cloudflared tunnel 公网入口     │
@@ -42,14 +47,15 @@
    | `CF_GLOBAL_API_KEY` | ✅ | Cloudflare Global API Key(仅用于部署时铸临时 token,用完即删) |
    | `KEEPALIVE_DOMAIN` | ✅ | worker 入口域名,如 `keepalive.example.com`(zone 内可建 DNS) |
 
-   **可选**(VPS 侧部署,不填则自动跳过):
+   **可选**(VPS 侧 SSH 同步,不填则只有主通道):
 
    | Secret | 说明 |
    |---|---|
    | `SSH_HOST` | CloudStudio SSH 网关域名,如 `<spaceKey>.<cluster>.ssh.cloudstudio.work`(网页 IDE 的 SSH 面板里复制) |
    | `SSH_USER` | 网关用户名,形如 `<accessToken>-<spaceKey>`(同上,网页面板复制) |
 
-   > **SSH 无需密码也无需密钥**:accessToken 本身嵌在用户名里就是凭证,网关的 keyboard-interactive 是零提示放行。所以 `SSH_HOST` + `SSH_USER` 两个 Secret 就够。`BROWSERLESS_KEY` 已不需要(打开网页 IDE 的活由每小时免密 SSH Actions 接管)。
+   > **主通道不需要 SSH**:Actions 每小时用腾讯云密钥铸一个 workspace token(TC3 签名,~10 分钟有效),驱动 runner 自带 Chrome 打开网页 IDE,触发 preview.yml autoOpen 启动链——不依赖会 7 天轮换的 SSH accessToken。
+   > SSH 仅是可选辅助通道(同步脚本+直查状态),accessToken 轮换后连不上也只是该步骤跳过,不影响主通道。`BROWSERLESS_KEY` 已不需要。
 
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
 4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
@@ -58,7 +64,8 @@
 
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
-- **容器重建自愈**:Worker 每天凌晨 4 点重启工作区后,`vps-boot.yml` 每小时免密 SSH 进去同步脚本 + 幂等拉起全部服务(最迟 1h 恢复,无需 browserless)
+- **容器重建自愈**:Worker 每天凌晨 4 点重启工作区后,`vps-boot.yml` 每小时铸 token 打开网页 IDE 触发 autoOpen 启动链(可选 SSH 同步脚本),最迟 1h 恢复,无需 browserless
+- **autoOpen 原理(逆向 browser-preview-lite)**:扩展在 IDE 打开时轮询 `workspaceFolders[0]/.vscode/preview.yml`,命中后用内置终端执行各 app 的 `run` 命令。Actions/直链打开的 IDE 根目录是 `/workspace`,所以 preview.yml 必须同时放 `/workspace/.vscode/` 一份(人工从控制台打开项目目录时用项目子目录下那份)
 - **改代码后再部署**:push `worker/**` 或 `vps/**` 自动触发,或手动 Run workflow
 
 ## 目录结构
@@ -68,7 +75,7 @@ worker/
   start.js            Worker 源码(TC3 签名调 CloudStudio API)
   wrangler.toml       cron 每分钟;需要 global_fetch_strictly_public
 vps/
-  preview.yml         写到 /workspace/<项目>/.vscode/preview.yml(autoOpen 启动链)
+  preview.yml         写到 /workspace/.vscode/ 和项目 .vscode/ 两处(autoOpen 启动链)
   restore-assets.sh   容器重建后重建软链(唯一入口,幂等)
   boot-all.sh         应用自启(示例:new-api)
   tunnel-start.sh     cloudflared tunnel
