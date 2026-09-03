@@ -47,14 +47,15 @@
    | `CF_GLOBAL_API_KEY` | ✅ | Cloudflare Global API Key(仅用于部署时铸临时 token,用完即删) | `950bc807****0ff83a8f` |
    | `KEEPALIVE_DOMAIN` | ✅ | worker 入口域名(zone 内可建 DNS,不带 `https://`) | `keepalive.****4.eu.org` |
 
-   **可选**(VPS 侧 SSH 同步,不填则只有主通道):
+   **可选**(VPS 侧 SSH 同步,不填则只有主通道),只需 1 个 Secret,粘贴整条 SSH 命令即可,部署时会自动拆解:
 
    | Secret | 说明 | 值样例(轻码) |
    |---|---|---|
-   | `SSH_HOST` | CloudStudio SSH 网关域名(网页 IDE 的 SSH 面板里复制) | `qligjr.****3.ssh.cloudstudio.work` |
-   | `SSH_USER` | 网关用户名,形如 `<accessToken>-<spaceKey>`(同上,网页面板复制;整串就是凭证,**无需密码/密钥**) | `996a09e9****a11ab9-qligjr` |
+   | `SSH_URI` | 网页 IDE 的 SSH 面板里复制的完整连接串(整串就是凭证,**无需密码/密钥**) | `ssh 996a09e9****a11ab9-qligjr@qligjr.****3.ssh.cloudstudio.work` |
 
-   > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制;`SSH_USER` 尾部 `-` 后面跟的就是 spaceKey。
+   > 也接受不带 `ssh ` 前缀的裸 `user@host` 形式;旧版分开的 `SSH_HOST` + `SSH_USER` 两个 Secret 仍然兼容。
+
+   > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制;`SSH_URI` 里 `@` 前面是 `<accessToken>-<spaceKey>`、`@` 后面是网关域名,整条从面板复制后原样粘贴,工作流会自动拆。
 
    > **主通道不需要 SSH**:Actions 每小时用腾讯云密钥铸一个 workspace token(TC3 签名,~10 分钟有效),驱动 runner 自带 Chrome 打开网页 IDE,触发 preview.yml autoOpen 启动链——不依赖会 7 天轮换的 SSH accessToken。
    > SSH 仅是可选辅助通道(同步脚本+直查状态),accessToken 轮换后连不上也只是该步骤跳过,不影响主通道。`BROWSERLESS_KEY` 已不需要。
