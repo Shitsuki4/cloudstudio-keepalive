@@ -5,7 +5,8 @@ name: Keepalive VPS Boot
 # 主通道:runner 自带 Chrome + 云 API 铸的 workspace token 打开网页 IDE
 #   → 触发 preview.yml autoOpen → 启动链(restore→boot→tunnel→probe→selfheal)
 #   不依赖 browserless(付费)也不依赖 SSH accessToken(7 天轮换)
-# 辅通道(可选):免密 SSH 同步脚本 + 直查状态。token 轮换后连不上也不影响主通道
+# 终端通道(可选):通过 Worker /ide/<space> 端点打开网页终端,直接执行命令读回输出,
+#   同步脚本 + 直查状态,彻底取代 SSH(免 accessToken 轮换)。失败不阻塞主通道
 on:
   workflow_dispatch:
   schedule:
@@ -13,7 +14,7 @@ on:
 
 jobs:
   boot:
-    name: IDE autoOpen 启动链 + SSH 同步(可选)
+    name: IDE autoOpen 启动链 + 终端同步(可选)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,53 +34,14 @@ jobs:
           npm install --no-save puppeteer-core@23 > /dev/null 2>&1
           node .github/scripts/open-ide.js "$SPACE" "$TOKEN" "$(which google-chrome)"
 
-      - name: SSH 同步脚本(可选,token 7 天轮换;连不上不阻塞)
-        id: sshsync
+      - name: 终端通道同步脚本 + 直查状态(免 SSH,失败不阻塞)
+        id: ideexec
         continue-on-error: true
         env:
-          SSH_URI: ${{ secrets.SSH_URI }}
-          # 兼容旧的分开两个 Secret 的填法
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+          SPACE: ${{ steps.mint.outputs.space }}
         run: |
-          # SSH_URI 支持完整 ssh 命令或裸 user@host,这里自动拆解
-          uri="$SSH_URI"
-          [ -z "$uri" ] && [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && uri="$SSH_USER@$SSH_HOST"
-          if [ -z "$uri" ]; then echo "未配置 SSH,跳过同步"; exit 0; fi
-          uri="${uri#ssh }"; uri="${uri%% *}"
-          SSH_USER="${uri%%@*}"; SSH_HOST="${uri##*@}"
-          echo "parsed: $SSH_USER@$SSH_HOST"
-
-          # dns.google 在 runner 上时通时断,3 个 DoH 依次试
-          resolve() {
-            for doh in "https://dns.google/resolve" "https://1.1.1.1/dns-query?Accept=application/dns-json" "https://dns.alidns.com/resolve"; do
-              ip=$(curl -s --max-time 15 "$doh?name=${SSH_HOST}&type=A" 2>/dev/null \
-                | python3 -c "import sys,json
-          d=json.load(sys.stdin)
-          ans=d.get('Answer') or []
-          print(next(a['data'] for a in ans if a['type']==1))" 2>/dev/null) && [ -n "$ip" ] && { echo "$ip"; return; }
-            done
-            return 1
-          }
-          IP=$(resolve) || { echo "DoH 全部解析失败,跳过 SSH 同步(主通道不受影响)"; exit 0; }
-          echo "gateway $SSH_HOST -> $IP"
-          echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
-
-          SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
-          # 网关对频繁新建连接不稳:全部文件单连接 tar 管道一次传完,失败重试一次
-          upload() {
-            ssh $SSHOPT "$SSH_USER@$SSH_HOST" "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/.vscode /workspace/programming-language-demo/.vscode /tmp/kdeploy"
-            tar -C vps -cf - restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh preview.yml \
-              | ssh $SSHOPT "$SSH_USER@$SSH_HOST" "tar -C /tmp/kdeploy -xf -"
-            ssh $SSHOPT "$SSH_USER@$SSH_HOST" "install -m755 /tmp/kdeploy/*.sh /workspace/programming-language-demo/apps/new-api/ && install -m644 /tmp/kdeploy/preview.yml /workspace/.vscode/preview.yml && install -m644 /tmp/kdeploy/preview.yml /workspace/programming-language-demo/.vscode/preview.yml"
-          }
-
-          ssh_run() { ssh $SSHOPT "$SSH_USER@$SSH_HOST" "$1"; }
-
-          ssh_run "echo connected" || { echo "SSH 连不上(accessToken 可能已轮换)— 主通道不受影响,提醒更新 SSH_USER"; exit 0; }
-
-          echo "[1/2] 同步脚本(单连接)"
-          upload || { echo "首次上传失败,10s 后重试"; sleep 10; upload; }
-
-          echo "[2/2] 状态"
-          ssh_run "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh && ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; curl -s -o /dev/null -w 'localhost:3000 HTTP %{http_code}\n' --max-time 5 http://localhost:3000/ || true"
+          DOMAIN="${KEEPALIVE_DOMAIN#https://}"
+          node .github/scripts/ide-exec.js "https://$DOMAIN/ide/$SPACE" "$(which google-chrome)" \
+            --cmd "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh 2>/dev/null; ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; curl -s -o /dev/null -w 'localhost:3000 HTTP %{http_code}\n' --max-time 5 http://localhost:3000/ || true" \
+            --expect "HTTP"
