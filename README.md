@@ -39,20 +39,22 @@
 1. **Fork / 推送本仓库到你的 GitHub(Private)**
 2. **仓库 Settings → Secrets and variables → Actions → Secrets** 添加(就这 5 个):
 
-   | Secret | 必须 | 说明 |
-   |---|---|---|
-   | `TENCENT_SECRET_ID` | ✅ | 腾讯云 API 密钥 Id(`AKID...`) |
-   | `TENCENT_SECRET_KEY` | ✅ | 腾讯云 API 密钥 Key |
-   | `CF_AUTH_EMAIL` | ✅ | Cloudflare 账号邮箱 |
-   | `CF_GLOBAL_API_KEY` | ✅ | Cloudflare Global API Key(仅用于部署时铸临时 token,用完即删) |
-   | `KEEPALIVE_DOMAIN` | ✅ | worker 入口域名,如 `keepalive.example.com`(zone 内可建 DNS) |
+   | Secret | 必须 | 说明 | 值样例(轻码) |
+   |---|---|---|---|
+   | `TENCENT_SECRET_ID` | ✅ | 腾讯云 API 密钥 Id | `AKIDfMo7****tqyrV` |
+   | `TENCENT_SECRET_KEY` | ✅ | 腾讯云 API 密钥 Key | `ThfOsIcj****XjiV5` |
+   | `CF_AUTH_EMAIL` | ✅ | Cloudflare 账号邮箱 | `31105****72@qq.com` |
+   | `CF_GLOBAL_API_KEY` | ✅ | Cloudflare Global API Key(仅用于部署时铸临时 token,用完即删) | `950bc807****0ff83a8f` |
+   | `KEEPALIVE_DOMAIN` | ✅ | worker 入口域名(zone 内可建 DNS,不带 `https://`) | `keepalive.****4.eu.org` |
 
    **可选**(VPS 侧 SSH 同步,不填则只有主通道):
 
-   | Secret | 说明 |
-   |---|---|
-   | `SSH_HOST` | CloudStudio SSH 网关域名,如 `<spaceKey>.<cluster>.ssh.cloudstudio.work`(网页 IDE 的 SSH 面板里复制) |
-   | `SSH_USER` | 网关用户名,形如 `<accessToken>-<spaceKey>`(同上,网页面板复制) |
+   | Secret | 说明 | 值样例(轻码) |
+   |---|---|---|
+   | `SSH_HOST` | CloudStudio SSH 网关域名(网页 IDE 的 SSH 面板里复制) | `qligjr.****3.ssh.cloudstudio.work` |
+   | `SSH_USER` | 网关用户名,形如 `<accessToken>-<spaceKey>`(同上,网页面板复制;整串就是凭证,**无需密码/密钥**) | `996a09e9****a11ab9-qligjr` |
+
+   > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制;`SSH_USER` 尾部 `-` 后面跟的就是 spaceKey。
 
    > **主通道不需要 SSH**:Actions 每小时用腾讯云密钥铸一个 workspace token(TC3 签名,~10 分钟有效),驱动 runner 自带 Chrome 打开网页 IDE,触发 preview.yml autoOpen 启动链——不依赖会 7 天轮换的 SSH accessToken。
    > SSH 仅是可选辅助通道(同步脚本+直查状态),accessToken 轮换后连不上也只是该步骤跳过,不影响主通道。`BROWSERLESS_KEY` 已不需要。
