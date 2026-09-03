@@ -145,21 +145,20 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
           SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
+
+          # 网关对频繁新建连接不稳:全部文件走单条 ssh 连接 tar 管道一次传完,失败重试一次
+          upload() {
+            ssh $SSHOPT "$SSH_USER@$SSH_HOST" "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/.vscode /workspace/programming-language-demo/.vscode /tmp/kdeploy"
+            tar -C vps -cf - restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh preview.yml \
+              | ssh $SSHOPT "$SSH_USER@$SSH_HOST" "tar -C /tmp/kdeploy -xf -"
+            ssh $SSHOPT "$SSH_USER@$SSH_HOST" "install -m755 /tmp/kdeploy/*.sh /workspace/programming-language-demo/apps/new-api/ && install -m644 /tmp/kdeploy/preview.yml /workspace/.vscode/preview.yml && install -m644 /tmp/kdeploy/preview.yml /workspace/programming-language-demo/.vscode/preview.yml"
+          }
+
+          echo "[1/3] 上传 vps/ 脚本 + preview.yml(单连接)"
+          upload || { echo "首次上传失败,10s 后重试"; sleep 10; upload; }
+
+          echo "[2/3] 立即执行启动链(不等凌晨 4 点)"
           ssh_run() { ssh $SSHOPT "$SSH_USER@$SSH_HOST" "$1"; }
-          scp_file() { scp -O -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; }
-
-          echo "[1/4] 建目录"
-          ssh_run "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/programming-language-demo/.vscode /tmp/kdeploy"
-
-          echo "[2/4] 上传 vps/ 脚本"
-          for f in restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh; do
-            scp_file "vps/$f" "/workspace/programming-language-demo/apps/new-api/$f" || exit 1
-          done
-
-          echo "[3/4] 写 preview.yml(autoOpen 启动链)"
-          scp_file "vps/preview.yml" "/workspace/programming-language-demo/.vscode/preview.yml" || exit 1
-
-          echo "[4/4] 立即执行启动链(不等凌晨 4 点)"
           ssh_run "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh && bash restore-assets.sh && bash boot-all.sh && bash tunnel-start.sh && (bash probe-start.sh || true) && bash selfheal-start.sh; sleep 8; echo '--- 进程 ---'; ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; echo '--- 本地 3000 ---'; curl -s -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:3000/ || true"
 
   summary:
