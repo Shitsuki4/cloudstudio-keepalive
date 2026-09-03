@@ -106,9 +106,10 @@ async function fetchHandler(request, env, ctx) {
         });
       }
       if (isIde) {
+        // 302(不缓存):token 是一次性的,301 会被浏览器缓存导致下次跳旧 token
         return Response.redirect(
           `https://ide.cloud.tencent.com/tty/${spaceKey}/?report_open_type=list_open&token=${token}`,
-          301
+          302
         );
       }
     }
