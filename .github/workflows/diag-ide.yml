@@ -1,0 +1,66 @@
+name: Diag IDE Open
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 铸 token
+        id: mint
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/tc-wtoken.py
+
+      - name: 诊断 IDE 页面
+        env:
+          SPACE: ${{ steps.mint.outputs.space }}
+          TOKEN: ${{ steps.mint.outputs.token }}
+        run: |
+          npm install --no-save puppeteer-core@23 > /dev/null 2>&1
+          cat > /tmp/diag-ide.js <<'EOF'
+          const puppeteer = require("puppeteer-core");
+          (async () => {
+            const [spaceKey, token, exe] = process.argv.slice(2);
+            const browser = await puppeteer.launch({
+              executablePath: exe || "google-chrome",
+              headless: true,
+              args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu", "--disable-dev-shm-usage"],
+            });
+            try {
+              const page = await browser.newPage();
+              const url = `https://ide.cloud.tencent.com/tty/${spaceKey}/?report_open_type=list_open&token=${token}`;
+              console.log("open:", url.replace(token, "***"));
+              try {
+                await page.goto(url, { waitUntil: "networkidle2", timeout: 90000 });
+              } catch (e) {
+                console.log("goto timeout, continue");
+              }
+              await new Promise((r) => setTimeout(r, 30000));
+              console.log("title:", await page.title());
+              console.log("url:", page.url());
+              await page.screenshot({ path: "/tmp/ide.png" });
+              const html = await page.content();
+              require("fs").writeFileSync("/tmp/ide.html", html);
+              console.log("html length:", html.length);
+              console.log("has xterm:", html.includes("xterm"));
+              console.log("body text:", html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 400));
+            } finally {
+              await browser.close();
+            }
+          })().catch((e) => { console.error("FAIL:", e.message); process.exit(1); });
+          EOF
+          node /tmp/diag-ide.js "$SPACE" "$TOKEN" "$(which google-chrome)"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ide-diag
+          path: |
+            /tmp/ide.png
+            /tmp/ide.html
+          retention-days: 3
