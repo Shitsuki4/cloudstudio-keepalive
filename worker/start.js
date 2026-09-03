@@ -1,7 +1,7 @@
 // CloudStudio 免费工作区保活 Worker(腾讯云 SecretId/Key TC3 签名版)
 // Secrets(必需): TENCENT_SECRET_ID / TENCENT_SECRET_KEY / KEEPALIVE_HOST
 // Secret(可选): BROWSERLESS_KEY — 重启后打开网页 IDE 触发 preview.yml
-//   (现已有每小时免密 SSH 的 vps-boot.yml 兜底,不配也能自愈,配置则恢复更快)
+//   (现已有每小时铸 token + Actions Chrome 的 vps-boot.yml 兜底,不配也能自愈)
 // Vars: SPACE_KEYS 逗号分隔的工作区 key(留空则只有 WORKER_DEFAULT_SPACE_KEY)
 
 // 访问网页 IDE,等待终端加载完成 -> 触发 preview.yml autoOpen 启动应用
