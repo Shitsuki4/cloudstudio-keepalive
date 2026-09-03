@@ -97,3 +97,5 @@ vps/
 - 腾讯云 API 短时间高频调用会临时限流,错误伪装成 `AuthFailure.SignatureFailure`——过几分钟自愈,别去改签名代码
 - 新工作区 `/workspace` 是空的:vps/ 脚本对缺失资产做了跳过守卫,应用就位后 selfheal 每分钟自动补拉起
 - **网页终端通道(ide-exec.js)读输出靠 WS 帧**:现代 xterm 渲染到 canvas,DOM 里读不到终端文本,必须监听 CDP 的 `Network.webSocketFrameReceived` 从 `{"id":N,"event":"..."}` 帧里读回;打字走 helper textarea,命令末尾追加 sentinel echo 判完成
+- **ide-exec.js 终端面板偶发不自动展开**(约 1/3 概率):打开 tty 后 body 显示「切换终端 Ctrl+`」说明终端面板没自动挂载,`textarea` 会 90s 超时。兜底:等 textarea 时每 3s `page.mouse.click` 聚焦 + `Ctrl+Backquote` 切终端;首轮失败再重载页面重等一轮
+- **deploy.yml 心跳 curl 在 DNS 未就绪时 exit 6 会杀脚本**:workflow 默认 `bash -e`,bind-route 刚建完 proxied DNS 记录有传播延迟,`code=$(curl ...)` 一旦 curl 因 DNS 未解析(exit 6)失败就触发 `set -e` 直接退出,12 次重试循环根本没跑(日志无 try 输出)。兜底:curl 尾部加 `2>/dev/null) || code=000`,让重试循环真正生效
