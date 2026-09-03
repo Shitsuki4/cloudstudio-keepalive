@@ -120,13 +120,33 @@ function buildSyncCommands() {
     try { await page.goto(ideUrl, { waitUntil: "networkidle2", timeout: 120000 }); }
     catch (e) { console.log("goto timeout(正常,长连接),继续…"); }
 
+    // 终端面板偶发不自动展开(需 Ctrl+` 切换):先聚焦工作区再发快捷键兜底
+    async function nudgeTerminal() {
+      try {
+        await page.mouse.click(400, 300);
+        await page.keyboard.down("Control");
+        await page.keyboard.press("Backquote");
+        await page.keyboard.up("Control");
+      } catch {}
+    }
     let ta = null;
     for (let i = 0; i < 30 && !ta; i++) {
       await new Promise((r) => setTimeout(r, 3000));
       ta = await page.$("textarea.xterm-helper-textarea, textarea");
+      if (!ta) await nudgeTerminal();
     }
     if (!ta) {
-      console.error("!!! 90s 内终端 textarea 未出现");
+      // 偶发加载慢/终端未挂载:重新加载页面再等一轮
+      console.log("!! 首轮 90s 未找到 textarea,重新加载页面重试…");
+      try { await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 60000 }); } catch {}
+      for (let i = 0; i < 20 && !ta; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        ta = await page.$("textarea.xterm-helper-textarea, textarea");
+        if (!ta) await nudgeTerminal();
+      }
+    }
+    if (!ta) {
+      console.error("!!! 终端 textarea 仍未出现");
       console.log("url:", page.url());
       console.log("body:", (await page.evaluate(() => document.body.innerText.slice(0, 600)).catch(() => "")).replace(/\n/g, "\\n"));
       await page.screenshot({ path: "/tmp/ide-exec-fail.png" }).catch(() => {});
