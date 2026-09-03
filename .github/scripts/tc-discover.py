@@ -46,13 +46,21 @@ req = urllib.request.Request("https://" + host, data=payload.encode("utf-8"), he
     "X-TC-Action": "DescribeWorkspaces", "X-TC-Timestamp": str(timestamp),
     "X-TC-Version": version, "X-TC-Region": "ap-shanghai"})
 
-try:
-    with urllib.request.urlopen(req, timeout=30) as r:
-        d = json.load(r)
-except urllib.error.HTTPError as e:
-    print("HTTP %d: %s" % (e.code, e.read().decode()[:800])); sys.exit(1)
-except Exception as e:
-    print("NET: %s" % e); sys.exit(2)
+# 腾讯云 API 偶发超时(出口网络抖动),重试 4 次
+last = None
+for attempt in range(4):
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            d = json.load(r)
+        break
+    except urllib.error.HTTPError as e:
+        print("HTTP %d: %s" % (e.code, e.read().decode()[:800])); sys.exit(1)
+    except Exception as e:
+        last = e
+        print("NET: %s (attempt %d/4)" % (e, attempt + 1))
+        time.sleep(5)
+else:
+    print("NET: %s" % last); sys.exit(2)
 
 if d.get("Response", {}).get("Error"):
     print("TencentCloud Error:", d["Response"]["Error"]); sys.exit(1)
