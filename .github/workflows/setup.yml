@@ -5,7 +5,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  actions: write
+  actions: write # 触发 deploy.yml 需要
+  contents: read # checkout 需要(permissions 块会把未列出的权限置为 none,不能省)
 
 jobs:
   check-secrets:
