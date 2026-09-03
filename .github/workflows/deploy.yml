@@ -25,15 +25,35 @@ jobs:
     outputs:
       space_first: ${{ steps.discover.outputs.first }}
       has_ssh: ${{ steps.sshcheck.outputs.has_ssh }}
+      ssh_user: ${{ steps.sshcheck.outputs.user }}
+      ssh_host: ${{ steps.sshcheck.outputs.host }}
     steps:
       - uses: actions/checkout@v4
 
       - name: 探测是否配置了 SSH(决定 VPS job 是否运行)
         id: sshcheck
         env:
+          SSH_URI: ${{ secrets.SSH_URI }}
+          # 兼容旧的分开两个 Secret 的填法
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-        run: echo "has_ssh=$([ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
+        run: |
+          # SSH_URI 支持两种格式,自动拆解:
+          #   ① 完整命令: ssh 996a...-qligjr@qligjr.xxx.ssh.cloudstudio.work
+          #   ② 裸目标:   996a...-qligjr@qligjr.xxx.ssh.cloudstudio.work
+          uri="$SSH_URI"
+          if [ -z "$uri" ] && [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ]; then
+            uri="$SSH_USER@$SSH_HOST" # 旧式分开填的 fallback
+          fi
+          if [ -z "$uri" ]; then
+            echo "has_ssh=0" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          uri="${uri#ssh }"            # 去掉 ssh 前缀
+          uri="${uri%% *}"             # 去掉可能跟着的端口等尾巴
+          echo "user=${uri%%@*}" >> "$GITHUB_OUTPUT"
+          echo "host=${uri##*@}" >> "$GITHUB_OUTPUT"
+          echo "parsed: ${uri%%@*}@${uri##*@}"
+          echo "has_ssh=1" >> "$GITHUB_OUTPUT"
 
       # ── 0. 用腾讯云密钥自动发现 spaceKey ──
       - name: 自动发现工作区 spaceKey
@@ -138,7 +158,7 @@ jobs:
       # 无需密码/密钥;但绝不能加 BatchMode(会禁用交互通道直接失败)
       - name: 解析网关真实 IP(runner 本地 DNS 查不到腾讯 CNAME,走 DoH,写 /etc/hosts)
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_HOST: ${{ needs.deploy-worker.outputs.ssh_host }}
         run: |
           IP=$(curl -s --max-time 20 "https://dns.google/resolve?name=${SSH_HOST}&type=A" \
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['data'] for a in d['Answer'] if a['type']==1))")
@@ -148,8 +168,8 @@ jobs:
 
       - name: 上传脚本 + 写 preview.yml 启动链
         env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ needs.deploy-worker.outputs.ssh_host }}
+          SSH_USER: ${{ needs.deploy-worker.outputs.ssh_user }}
         run: |
           SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
 
