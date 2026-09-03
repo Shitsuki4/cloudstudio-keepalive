@@ -37,10 +37,19 @@ jobs:
         id: sshsync
         continue-on-error: true
         env:
+          SSH_URI: ${{ secrets.SSH_URI }}
+          # 兼容旧的分开两个 Secret 的填法
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
         run: |
-          [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] || { echo "未配置 SSH,跳过同步"; exit 0; }
+          # SSH_URI 支持完整 ssh 命令或裸 user@host,这里自动拆解
+          uri="$SSH_URI"
+          [ -z "$uri" ] && [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && uri="$SSH_USER@$SSH_HOST"
+          if [ -z "$uri" ]; then echo "未配置 SSH,跳过同步"; exit 0; fi
+          uri="${uri#ssh }"; uri="${uri%% *}"
+          SSH_USER="${uri%%@*}"; SSH_HOST="${uri##*@}"
+          echo "parsed: $SSH_USER@$SSH_HOST"
+
           IP=$(curl -s --max-time 20 "https://dns.google/resolve?name=${SSH_HOST}&type=A" \
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['data'] for a in d['Answer'] if a['type']==1))")
           echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
