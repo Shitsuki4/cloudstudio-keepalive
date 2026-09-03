@@ -52,10 +52,12 @@ jobs:
           ssh_run "echo connected" || { echo "SSH 连不上(accessToken 可能已轮换)— 主通道不受影响,提醒更新 SSH_USER"; exit 0; }
 
           echo "[1/2] 同步脚本"
-          ssh_run "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/programming-language-demo/.vscode"
+          ssh_run "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/.vscode /workspace/programming-language-demo/.vscode"
           for f in restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh; do
             scp_file "vps/$f" "/workspace/programming-language-demo/apps/new-api/$f" || exit 1
           done
+          # preview.yml 两处都放:tty 直开时 workspaceFolders[0]=/workspace,控制台打开项目时是子目录
+          scp_file "vps/preview.yml" "/workspace/.vscode/preview.yml" || exit 1
           scp_file "vps/preview.yml" "/workspace/programming-language-demo/.vscode/preview.yml" || exit 1
 
           echo "[2/2] 状态"
