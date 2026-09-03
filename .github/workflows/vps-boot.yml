@@ -1,62 +1,62 @@
 name: Keepalive VPS Boot
 
-# 每小时 SSH 进工作区,同步脚本 + 幂等执行启动链(取代 browserless 打开网页 IDE):
-# - /workspace 跨重建幸存,但软链(/usr/local/bin 等)和进程全没了 → restore-assets + selfheal 重新拉起
-# - SSH 免密:accessToken 嵌在用户名里即凭证(SSH_USER),不能加 BatchMode
-# - 未配置 SSH_HOST/SSH_USER 时静默跳过(步骤级判断,job 级 if 引用不了 secrets)
+# 每小时恢复工作区服务(容器重建后进程清零,只有 /workspace 幸存):
+#
+# 主通道:runner 自带 Chrome + 云 API 铸的 workspace token 打开网页 IDE
+#   → 触发 preview.yml autoOpen → 启动链(restore→boot→tunnel→probe→selfheal)
+#   不依赖 browserless(付费)也不依赖 SSH accessToken(7 天轮换)
+# 辅通道(可选):免密 SSH 同步脚本 + 直查状态。token 轮换后连不上也不影响主通道
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7 * * * *" # 每小时 :07(UTC);北京 4 点重启窗口(20:0x UTC)过后自然恢复
+    - cron: "7 * * * *" # 每小时 :07(UTC)
 
 jobs:
   boot:
-    name: SSH 启动链(幂等)
+    name: IDE autoOpen 启动链 + SSH 同步(可选)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: 检查 SSH 配置
-        id: sshcheck
+      - name: 铸 workspace token(腾讯云密钥 TC3)
+        id: mint
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/tc-wtoken.py
+
+      - name: 打开网页 IDE 触发 autoOpen 启动链(runner Chrome,免 browserless)
+        env:
+          SPACE: ${{ steps.mint.outputs.space }}
+          TOKEN: ${{ steps.mint.outputs.token }}
+        run: |
+          npm install --no-save puppeteer-core@23 > /dev/null 2>&1
+          node .github/scripts/open-ide.js "$SPACE" "$TOKEN" "$(which google-chrome)"
+
+      - name: SSH 同步脚本(可选,token 7 天轮换;连不上不阻塞)
+        id: sshsync
+        continue-on-error: true
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
-        run: echo "ok=$([ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] && echo 1 || echo 0)" >> "$GITHUB_OUTPUT"
-
-      - name: 解析网关真实 IP(runner DNS 查不到腾讯 CNAME,走 DoH 写 /etc/hosts)
-        if: steps.sshcheck.outputs.ok == '1'
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
         run: |
+          [ -n "$SSH_HOST" ] && [ -n "$SSH_USER" ] || { echo "未配置 SSH,跳过同步"; exit 0; }
           IP=$(curl -s --max-time 20 "https://dns.google/resolve?name=${SSH_HOST}&type=A" \
             | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(a['data'] for a in d['Answer'] if a['type']==1))")
-          echo "gateway $SSH_HOST -> $IP"
-          if [ -z "$IP" ]; then echo "DoH 解析失败"; exit 1; fi
           echo "$IP $SSH_HOST" | sudo tee -a /etc/hosts > /dev/null
 
-      - name: 同步脚本 + 执行启动链
-        if: steps.sshcheck.outputs.ok == '1'
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-        run: |
           SSHOPT="-o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new -o PreferredAuthentications=keyboard-interactive"
           ssh_run() { ssh $SSHOPT "$SSH_USER@$SSH_HOST" "$1"; }
           scp_file() { scp -O -o ConnectTimeout=30 -o StrictHostKeyChecking=accept-new "$1" "$SSH_USER@$SSH_HOST:$2"; }
 
-          # 连接重试:工作区可能正在重启(心跳 Worker 会拉起,不硬失败)
-          ssh_run "echo connected" || { echo "SSH 失败,60s 后重试(工作区可能重启中)"; sleep 60; \
-            ssh_run "echo connected" || { echo "SSH 仍失败 — 工作区已停止,等心跳拉起后下小时自动恢复"; exit 0; }; }
+          ssh_run "echo connected" || { echo "SSH 连不上(accessToken 可能已轮换)— 主通道不受影响,提醒更新 SSH_USER"; exit 0; }
 
-          echo "[1/3] 同步脚本(每次覆盖,保持与仓库一致)"
+          echo "[1/2] 同步脚本"
           ssh_run "mkdir -p /workspace/programming-language-demo/apps/new-api /workspace/programming-language-demo/.vscode"
           for f in restore-assets.sh boot-all.sh tunnel-start.sh probe-start.sh selfheal.sh selfheal-start.sh; do
             scp_file "vps/$f" "/workspace/programming-language-demo/apps/new-api/$f" || exit 1
           done
           scp_file "vps/preview.yml" "/workspace/programming-language-demo/.vscode/preview.yml" || exit 1
 
-          echo "[2/3] 执行启动链(幂等)"
-          ssh_run "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh && bash restore-assets.sh && bash boot-all.sh && bash tunnel-start.sh && (bash probe-start.sh || true) && bash selfheal-start.sh"
-
-          echo "[3/3] 状态"
-          ssh_run "ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; curl -s -o /dev/null -w 'localhost:3000 HTTP %{http_code}\n' --max-time 5 http://localhost:3000/ || true"
+          echo "[2/2] 状态"
+          ssh_run "cd /workspace/programming-language-demo/apps/new-api && chmod +x *.sh && ps aux | grep -E 'new-api|cloudflared|cf-probe|selfheal' | grep -v grep | awk '{print \$11}' | sort | uniq -c; curl -s -o /dev/null -w 'localhost:3000 HTTP %{http_code}\n' --max-time 5 http://localhost:3000/ || true"
