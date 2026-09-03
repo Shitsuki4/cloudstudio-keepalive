@@ -102,8 +102,15 @@ jobs:
           SPACE: ${{ steps.discover.outputs.first }}
         run: |
           echo "--- GET $HOST/heart/$SPACE ---"
-          code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 45 "$HOST/heart/$SPACE")
-          echo "HTTP $code"; head -c 400 /tmp/heart.json; echo
+          # 刚建的 proxied DNS 记录要几十秒才可解析(exit 6),重试到 2 分钟
+          code=000
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 30 "$HOST/heart/$SPACE")
+            echo "try $i: HTTP $code"
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          head -c 400 /tmp/heart.json; echo
           if [ "$code" != "200" ]; then echo "❌ 心跳失败:检查 TENCENT_SECRET_ID/KEY 与 spaceKey 是否匹配"; exit 1; fi
 
       - name: 清理临时 token
