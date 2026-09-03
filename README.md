@@ -13,7 +13,7 @@
 ┌─ GitHub Actions 每小时(vps-boot.yml)──────────────┐
 │  ① 云 API 铸 workspace token → runner Chrome 打开   │
 │     网页 IDE → preview.yml autoOpen → 启动链         │
-│  ② (可选)免密 SSH 同步脚本 + 直查状态               │
+│  ② Worker /ide/<space> 网页终端 → 同步脚本 + 查状态  │
 │  最迟 1h 自动恢复                                    │
 └────────────────────┬───────────────────────────┘
                      ▼
@@ -47,18 +47,10 @@
    | `CF_GLOBAL_API_KEY` | ✅ | Cloudflare Global API Key(仅用于部署时铸临时 token,用完即删) | `950bc807****0ff83a8f` |
    | `KEEPALIVE_DOMAIN` | ✅ | worker 入口域名(zone 内可建 DNS,不带 `https://`) | `keepalive.****4.eu.org` |
 
-   **可选**(VPS 侧 SSH 同步,不填则只有主通道),只需 1 个 Secret,粘贴整条 SSH 命令即可,部署时会自动拆解:
+   > **不需要 SSH**:VPS 侧脚本同步 + 状态检查走 Worker 的 `/ide/<space>` 网页终端通道(`ide-exec.js` 用 runner Chrome 打开终端、打字执行命令、读回 WS 输出),彻底免掉会 7 天轮换的 SSH accessToken。
+   > 主通道每小时用腾讯云密钥铸 workspace token 打开网页 IDE 触发 preview.yml autoOpen,同样不依赖 SSH。`BROWSERLESS_KEY` 已不需要。
 
-   | Secret | 说明 | 值样例(轻码) |
-   |---|---|---|
-   | `SSH_URI` | 网页 IDE 的 SSH 面板里复制的完整连接串(整串就是凭证,**无需密码/密钥**) | `ssh 996a09e9****a11ab9-qligjr@qligjr.****3.ssh.cloudstudio.work` |
-
-   > 也接受不带 `ssh ` 前缀的裸 `user@host` 形式;旧版分开的 `SSH_HOST` + `SSH_USER` 两个 Secret 仍然兼容。
-
-   > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制;`SSH_URI` 里 `@` 前面是 `<accessToken>-<spaceKey>`、`@` 后面是网关域名,整条从面板复制后原样粘贴,工作流会自动拆。
-
-   > **主通道不需要 SSH**:Actions 每小时用腾讯云密钥铸一个 workspace token(TC3 签名,~10 分钟有效),驱动 runner 自带 Chrome 打开网页 IDE,触发 preview.yml autoOpen 启动链——不依赖会 7 天轮换的 SSH accessToken。
-   > SSH 仅是可选辅助通道(同步脚本+直查状态),accessToken 轮换后连不上也只是该步骤跳过,不影响主通道。`BROWSERLESS_KEY` 已不需要。
+   > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制。
 
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
 4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
@@ -67,7 +59,7 @@
 
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
-- **容器重建自愈**:Worker 每天凌晨 4 点重启工作区后,`vps-boot.yml` 每小时铸 token 打开网页 IDE 触发 autoOpen 启动链(可选 SSH 同步脚本),最迟 1h 恢复,无需 browserless
+- **容器重建自愈**:Worker 每天凌晨 4 点重启工作区后,`vps-boot.yml` 每小时铸 token 打开网页 IDE 触发 autoOpen 启动链,最迟 1h 恢复,无需 browserless、无需 SSH
 - **autoOpen 原理(逆向 browser-preview-lite)**:扩展在 IDE 打开时轮询 `workspaceFolders[0]/.vscode/preview.yml`,命中后用内置终端执行各 app 的 `run` 命令。Actions/直链打开的 IDE 根目录是 `/workspace`,所以 preview.yml 必须同时放 `/workspace/.vscode/` 一份(人工从控制台打开项目目录时用项目子目录下那份)
 - **改代码后再部署**:push `worker/**` 或 `vps/**` 自动触发,或手动 Run workflow
 
@@ -87,19 +79,21 @@ vps/
 .github/
   scripts/cf-token.py     Global Key → 临时 token + zone/account 自动发现
   scripts/tc-discover.py  腾讯云密钥 → spaceKey 自动发现
+  scripts/tc-wtoken.py    腾讯云密钥 → workspace token(TC3 签名)
+  scripts/open-ide.js     打开网页 IDE 触发 autoOpen 启动链(主通道)
+  scripts/ide-exec.js     网页终端通道:同步脚本 + 执行命令 + 读回输出(取代 SSH)
   scripts/bind-route.sh   DNS A 记录 + workers route 绑定
   workflows/setup.yml     首次引导(校验 → 部署)
-  workflows/deploy.yml    主部署(CF Worker + 可选 VPS)
-  workflows/vps-boot.yml  每小时免密 SSH 启动链(容器重建自愈)
+  workflows/deploy.yml    主部署(CF Worker + VPS 启动链)
+  workflows/vps-boot.yml  每小时启动链(容器重建自愈)
 ```
 
 ## 已知坑(都踩过)
 
 - **workers.dev 域名被污染**:VPS 和本地都解析到假 IP,必须自定义域 + workers route
-- **GitHub runner DNS 查不到腾讯 CNAME**:部署时自动走 Google DoH 解析网关 IP 写 /etc/hosts
 - **无特权容器**:跑不了 docker,服务全部裸跑二进制
 - **满载会被回收**:32 核满载基准测试两次触发容器重建,负载控制在 8 核内
 - **只有 `/workspace` 跨重建幸存**:其余目录(/opt /etc /usr/local/bin)重建即清,靠 restore-assets.sh 重建软链
-- SSH 网关是 keyboard-interactive 且**免密**(accessToken 即凭证),**不能加 BatchMode**;scp 要加 `-O`
 - 腾讯云 API 短时间高频调用会临时限流,错误伪装成 `AuthFailure.SignatureFailure`——过几分钟自愈,别去改签名代码
 - 新工作区 `/workspace` 是空的:vps/ 脚本对缺失资产做了跳过守卫,应用就位后 selfheal 每分钟自动补拉起
+- **网页终端通道(ide-exec.js)读输出靠 WS 帧**:现代 xterm 渲染到 canvas,DOM 里读不到终端文本,必须监听 CDP 的 `Network.webSocketFrameReceived` 从 `{"id":N,"event":"..."}` 帧里读回;打字走 helper textarea,命令末尾追加 sentinel echo 判完成
