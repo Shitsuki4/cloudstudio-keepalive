@@ -97,7 +97,8 @@ jobs:
           # 刚建的 proxied DNS 记录要几十秒才可解析(exit 6),重试到 2 分钟
           code=000
           for i in $(seq 1 12); do
-            code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 30 "$HOST/heart/$SPACE")
+            # curl DNS 未解析(exit 6)时 set -e 会提前杀脚本,故 `|| code=000` 兜底让重试循环真正生效
+            code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 30 "$HOST/heart/$SPACE" 2>/dev/null) || code=000
             echo "try $i: HTTP $code"
             [ "$code" = "200" ] && break
             sleep 10
