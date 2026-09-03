@@ -20,9 +20,10 @@ jobs:
         env:
           SPACE: ${{ steps.mint.outputs.space }}
           TOKEN: ${{ steps.mint.outputs.token }}
+        working-directory: ${{ github.workspace }}
         run: |
           npm install --no-save puppeteer-core@23 > /dev/null 2>&1
-          cat > /tmp/diag-ide.js <<'EOF'
+          cat > diag-ide.js <<'EOF'
           const puppeteer = require("puppeteer-core");
           (async () => {
             const [spaceKey, token, exe] = process.argv.slice(2);
@@ -43,9 +44,9 @@ jobs:
               await new Promise((r) => setTimeout(r, 30000));
               console.log("title:", await page.title());
               console.log("url:", page.url());
-              await page.screenshot({ path: "/tmp/ide.png" });
+              await page.screenshot({ path: "ide.png" });
               const html = await page.content();
-              require("fs").writeFileSync("/tmp/ide.html", html);
+              require("fs").writeFileSync("ide.html", html);
               console.log("html length:", html.length);
               console.log("has xterm:", html.includes("xterm"));
               console.log("body text:", html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").slice(0, 400));
@@ -54,13 +55,13 @@ jobs:
             }
           })().catch((e) => { console.error("FAIL:", e.message); process.exit(1); });
           EOF
-          node /tmp/diag-ide.js "$SPACE" "$TOKEN" "$(which google-chrome)"
+          node diag-ide.js "$SPACE" "$TOKEN" "$(which google-chrome)"
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: ide-diag
           path: |
-            /tmp/ide.png
-            /tmp/ide.html
+            ide.png
+            ide.html
           retention-days: 3
