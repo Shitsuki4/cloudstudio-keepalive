@@ -1,0 +1,33 @@
+name: Cleanup Workspace
+
+# 全清重装验收用:清理 CloudStudio 工作区内的部署产物(脚本/preview.yml/进程/日志),
+# 还原到"初始环境",再配合删 CF 侧 worker/route/DNS 后从零重跑 setup → deploy。
+# 依赖 Worker /ide 端点(还没删),所以必须在删 Worker 之前跑。
+on:
+  workflow_dispatch:
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 发现 spaceKey
+        id: discover
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/tc-discover.py
+
+      - name: 清理工作区产物(终端通道)
+        env:
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+          SPACE: ${{ steps.discover.outputs.first }}
+        run: |
+          npm install --no-save puppeteer-core@23 > /dev/null 2>&1
+          DOMAIN="${KEEPALIVE_DOMAIN#https://}"
+          node .github/scripts/ide-exec.js "https://$DOMAIN/ide/$SPACE" "$(which google-chrome)" \
+            --cmd "pkill -f selfheal 2>/dev/null; pkill -x new-api 2>/dev/null; pkill -x cloudflared 2>/dev/null; pkill -x cf-probe 2>/dev/null; rm -rf /workspace/programming-language-demo/apps/new-api; rm -f /workspace/.vscode/preview.yml /workspace/programming-language-demo/.vscode/preview.yml /tmp/selfheal.log /tmp/new-api.log /opt/new-api /usr/local/bin/cloudflared /usr/local/bin/cf-probe /etc/cloudflared/token.txt /etc/config/cf-probe; echo CLEANUP_DONE" \
+            --expect "CLEANUP_DONE" \
+            --cmd "echo '--- 清理后 ---'; ls -la /workspace/.vscode/ 2>/dev/null; ls -la /workspace/programming-language-demo/apps/ 2>/dev/null; pgrep -af 'selfheal|new-api|cloudflared|cf-probe' || echo 'no keepalive processes'" \
+            --expect "--- 清理后 ---"
