@@ -1,7 +1,12 @@
 # .vscode/preview.yml — CloudStudio 工作区应用清单
-# autoOpen: true 的应用在工作区启动/打开网页 IDE 时自动运行
+# autoOpen: true 的应用在打开网页 IDE 时自动运行(browser-preview-lite 扩展)
 # 这是整个保活体系的"最后一公里":Worker 每分钟心跳防回收,
-# 凌晨 4 点 browserless 打开网页 IDE -> 触发这里的 autoOpen -> 拉起全部服务
+# 每小时 Actions 用 runner Chrome 打开网页 IDE -> 触发 autoOpen -> 拉起全部服务
+#
+# 部署位置(两处都放,vps-boot SSH 同步时覆盖):
+#   /workspace/.vscode/preview.yml           <- 主:Actions/直链 tty 打开时 workspaceFolders[0]=/workspace
+#   /workspace/programming-language-demo/.vscode/preview.yml  <- 人工从控制台打开项目目录时生效
+# run 命令全部用绝对路径,不依赖 cd 目标
 apps:
   - port: 3000
     run: /workspace/programming-language-demo/apps/new-api/restore-assets.sh && /workspace/programming-language-demo/apps/new-api/boot-all.sh && /workspace/programming-language-demo/apps/new-api/tunnel-start.sh && /workspace/programming-language-demo/apps/new-api/probe-start.sh && /workspace/programming-language-demo/apps/new-api/selfheal-start.sh
