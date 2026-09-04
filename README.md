@@ -67,6 +67,7 @@ worker/
 - **只有 `/workspace` 跨重建幸存**:其余目录(/opt /etc /usr/local/bin)重建即清
 - **SpaceKey ≠ Name**:`DescribeWorkspaces` 返回的 `Name` 是显示名,拿去调其他 API 会报 Workspace Not Found,必须用 `SpaceKey`
 - **DescribeWorkspaces 不收分页参数**:payload 必须是 `{}`,传了分页参数报错
+- **DescribeWorkspaces 会列出已回收工作区**:`Status == "INVALID"` 的是已删除的幽灵工作区,拿去 RunWorkspace/heartbeat 报 `Workspace had been removed`,发现脚本已自动过滤
 - **腾讯云 API 偶发限流**:错误伪装成 `AuthFailure.SignatureFailure`,过几分钟自愈,别去改签名代码
 - **CF 临时 token 用完即删**:部署用 Global Key 铸最小权限临时 token,部署完 DELETE,只留 Global Key 长期凭证
 - **deploy.yml 心跳 curl 在 DNS 未就绪时 exit 6 会杀脚本**:workflow 默认 `bash -e`,bind-route 刚建完 proxied DNS 记录有传播延迟,`code=$(curl ...)` 一旦 curl 因 DNS 未解析(exit 6)失败就触发 `set -e` 直接退出,12 次重试循环根本没跑(日志无 try 输出)。兜底:curl 尾部加 `2>/dev/null) || code=000`,让重试循环真正生效
