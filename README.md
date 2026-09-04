@@ -1,32 +1,17 @@
-> **⚠️ 本仓库包含服务器部署脚本,请保持 Private!**
+> **⚠️ 本仓库包含部署脚本,请保持 Private!**
 
 # CloudStudio Keepalive — 腾讯云 CloudStudio 免费工作区 24h 保活
 
-把腾讯 CloudStudio 免费工作区变成永久免费小服务器的完整可复现方案:
+把腾讯 CloudStudio 免费工作区变成不回收的永久工作区:
 
 ```
 ┌─ Cloudflare Worker(每分钟 cron)────────────────┐
 │  ① /heart/<space>   心跳 → 工作区 evict:false 不回收 │
 │  ② 每天 04:00(北京) RunWorkspace 重启工作区       │
-└────────────────────┬───────────────────────────┘
-                     ▼ 容器重建(进程清零,/workspace 幸存)
-┌─ GitHub Actions 每小时(vps-boot.yml)──────────────┐
-│  ① 云 API 铸 workspace token → runner Chrome 打开   │
-│     网页 IDE → preview.yml autoOpen → 启动链         │
-│  ② Worker /ide/<space> 网页终端 → 同步脚本 + 查状态  │
-│  最迟 1h 自动恢复                                    │
-└────────────────────┬───────────────────────────┘
-                     ▼
-┌─ CloudStudio 容器(只有 /workspace 跨重建幸存)──────┐
-│  preview.yml autoOpen(autoOpen 在打开网页 IDE 时    │
-│    自动执行下面的启动链;/workspace/.vscode/ 也要放) │
-│  restore-assets.sh  重建软链兼容层                  │
-│  boot-all.sh        new-api(或任意应用) :3000      │
-│  tunnel-start.sh    cloudflared tunnel 公网入口     │
-│  probe-start.sh     CF-Server-Monitor 探针(可选)    │
-│  selfheal-start.sh  每分钟自愈 + 每小时 SQLite 热备  │
-└──────────────────────────────────────────────┘
+└────────────────────────────────────────────────┘
 ```
+
+心跳是 Worker 出站调腾讯云 API 铸 workspace token 后打的 HTTP 请求,工作区本身**不需要开放任何端口**。
 
 ## 前置条件
 
@@ -47,9 +32,6 @@
    | `CF_GLOBAL_API_KEY` | ✅ | Cloudflare Global API Key(仅用于部署时铸临时 token,用完即删) | `950bc807****0ff83a8f` |
    | `KEEPALIVE_DOMAIN` | ✅ | worker 入口域名(zone 内可建 DNS,不带 `https://`) | `keepalive.****4.eu.org` |
 
-   > **不需要 SSH**:VPS 侧脚本同步 + 状态检查走 Worker 的 `/ide/<space>` 网页终端通道(`ide-exec.js` 用 runner Chrome 打开终端、打字执行命令、读回 WS 输出),彻底免掉会 7 天轮换的 SSH accessToken。
-   > 主通道每小时用腾讯云密钥铸 workspace token 打开网页 IDE 触发 preview.yml autoOpen,同样不依赖 SSH。`BROWSERLESS_KEY` 已不需要。
-
    > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制。
 
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
@@ -59,9 +41,8 @@
 
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
-- **容器重建自愈**:Worker 每天凌晨 4 点重启工作区后,`vps-boot.yml` 每小时铸 token 打开网页 IDE 触发 autoOpen 启动链,最迟 1h 恢复,无需 browserless、无需 SSH
-- **autoOpen 原理(逆向 browser-preview-lite)**:扩展在 IDE 打开时轮询 `workspaceFolders[0]/.vscode/preview.yml`,命中后用内置终端执行各 app 的 `run` 命令。Actions/直链打开的 IDE 根目录是 `/workspace`,所以 preview.yml 必须同时放 `/workspace/.vscode/` 一份(人工从控制台打开项目目录时用项目子目录下那份)
-- **改代码后再部署**:push `worker/**` 或 `vps/**` 自动触发,或手动 Run workflow
+- **每天 04:00(北京)重启工作区**:Worker 调 `RunWorkspace`,容器重建(进程清零,`/workspace` 数据幸存),之后心跳继续,工作区永不因空闲被回收
+- **改代码后再部署**:push `worker/**` 自动触发,或手动 Run workflow
 
 ## 目录结构
 
@@ -69,23 +50,13 @@
 worker/
   start.js            Worker 源码(TC3 签名调 CloudStudio API)
   wrangler.toml       cron 每分钟;需要 global_fetch_strictly_public
-vps/
-  preview.yml         写到 /workspace/.vscode/ 和项目 .vscode/ 两处(autoOpen 启动链)
-  restore-assets.sh   容器重建后重建软链(唯一入口,幂等)
-  boot-all.sh         应用自启(示例:new-api)
-  tunnel-start.sh     cloudflared tunnel
-  probe-start.sh      监控探针(可选)
-  selfheal*.sh        守护 + SQLite 热备
 .github/
   scripts/cf-token.py     Global Key → 临时 token + zone/account 自动发现
   scripts/tc-discover.py  腾讯云密钥 → spaceKey 自动发现
-  scripts/tc-wtoken.py    腾讯云密钥 → workspace token(TC3 签名)
-  scripts/open-ide.js     打开网页 IDE 触发 autoOpen 启动链(主通道)
-  scripts/ide-exec.js     网页终端通道:同步脚本 + 执行命令 + 读回输出(取代 SSH)
   scripts/bind-route.sh   DNS A 记录 + workers route 绑定
   workflows/setup.yml     首次引导(校验 → 部署)
-  workflows/deploy.yml    主部署(CF Worker + VPS 启动链)
-  workflows/vps-boot.yml  每小时启动链(容器重建自愈)
+  workflows/deploy.yml    主部署(CF Worker + 自定义域路由 + 心跳验证)
+  workflows/ci.yml        push 语法 lint
 ```
 
 ## 已知坑(都踩过)
@@ -93,9 +64,10 @@ vps/
 - **workers.dev 域名被污染**:VPS 和本地都解析到假 IP,必须自定义域 + workers route
 - **无特权容器**:跑不了 docker,服务全部裸跑二进制
 - **满载会被回收**:32 核满载基准测试两次触发容器重建,负载控制在 8 核内
-- **只有 `/workspace` 跨重建幸存**:其余目录(/opt /etc /usr/local/bin)重建即清,靠 restore-assets.sh 重建软链
-- 腾讯云 API 短时间高频调用会临时限流,错误伪装成 `AuthFailure.SignatureFailure`——过几分钟自愈,别去改签名代码
-- 新工作区 `/workspace` 是空的:vps/ 脚本对缺失资产做了跳过守卫,应用就位后 selfheal 每分钟自动补拉起
-- **网页终端通道(ide-exec.js)读输出靠 WS 帧**:现代 xterm 渲染到 canvas,DOM 里读不到终端文本,必须监听 CDP 的 `Network.webSocketFrameReceived` 从 `{"id":N,"event":"..."}` 帧里读回;打字走 helper textarea,命令末尾追加 sentinel echo 判完成
-- **ide-exec.js 终端面板偶发不自动展开**(约 1/3 概率):打开 tty 后 body 显示「切换终端 Ctrl+`」说明终端面板没自动挂载,`textarea` 会 90s 超时。兜底:等 textarea 时每 3s `page.mouse.click` 聚焦 + `Ctrl+Backquote` 切终端;首轮失败再重载页面重等一轮
+- **只有 `/workspace` 跨重建幸存**:其余目录(/opt /etc /usr/local/bin)重建即清
+- **SpaceKey ≠ Name**:`DescribeWorkspaces` 返回的 `Name` 是显示名,拿去调其他 API 会报 Workspace Not Found,必须用 `SpaceKey`
+- **DescribeWorkspaces 不收分页参数**:payload 必须是 `{}`,传了分页参数报错
+- **腾讯云 API 偶发限流**:错误伪装成 `AuthFailure.SignatureFailure`,过几分钟自愈,别去改签名代码
+- **CF 临时 token 用完即删**:部署用 Global Key 铸最小权限临时 token,部署完 DELETE,只留 Global Key 长期凭证
 - **deploy.yml 心跳 curl 在 DNS 未就绪时 exit 6 会杀脚本**:workflow 默认 `bash -e`,bind-route 刚建完 proxied DNS 记录有传播延迟,`code=$(curl ...)` 一旦 curl 因 DNS 未解析(exit 6)失败就触发 `set -e` 直接退出,12 次重试循环根本没跑(日志无 try 输出)。兜底:curl 尾部加 `2>/dev/null) || code=000`,让重试循环真正生效
+- **setup.yml permissions 坑**:写了 `permissions:` 块未列出的权限归零,checkout 私有仓库要 `contents: read` 一起写
