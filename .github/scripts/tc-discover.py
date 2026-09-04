@@ -67,6 +67,12 @@ if d.get("Response", {}).get("Error"):
 
 rows = d["Response"].get("Data") or d["Response"].get("WorkspaceList") or []
 if rows and isinstance(rows, dict): rows = rows.get("WorkspaceList", [])
+# 过滤已回收(INVALID)的工作区:DescribeWorkspaces 会列出已删除的幽灵工作区,
+# 拿去 RunWorkspace/heartbeat 会报 "Workspace had been removed"
+dead = [w.get("SpaceKey") or w.get("Name") for w in rows if w.get("Status") == "INVALID"]
+if dead:
+    print("跳过已回收(INVALID)工作区:", dead)
+rows = [w for w in rows if w.get("Status") != "INVALID"]
 # 注意:Name 是工作区显示名(如 "free"),SpaceKey 才是 API 用的真实 key —— 必须优先 SpaceKey
 keys = [w.get("SpaceKey") or w.get("Name") for w in rows]
 print("workspaces:", keys)
