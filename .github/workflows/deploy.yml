@@ -2,16 +2,10 @@ name: Keepalive Deploy
 
 on:
   workflow_dispatch:
-    inputs:
-      skip_vps:
-        description: "跳过 VPS 部署(只部署 Cloudflare Worker)"
-        type: boolean
-        default: false
   push:
     branches: [main]
     paths:
       - "worker/**"
-      - "vps/**"
       - ".github/workflows/deploy.yml"
 
 concurrency:
@@ -119,31 +113,10 @@ jobs:
             "https://api.cloudflare.com/client/v4/user/tokens/$TOKEN_ID")
           echo "delete temp token: HTTP $code"
 
-  deploy-vps:
-    name: VPS 启动链 + preview.yml(终端通道,免 SSH)
-    runs-on: ubuntu-latest
-    needs: deploy-worker
-    if: ${{ inputs.skip_vps != true }}
-    steps:
-      - uses: actions/checkout@v4
-
-      # 通过 Worker /ide/<space> 端点打开网页终端,直接把 vps/ 脚本 base64 写入工作区
-      # 再跑启动链 + 直查状态,读回输出。完全取代 SSH(免 accessToken 7 天轮换)
-      - name: 终端通道同步脚本 + 跑启动链 + 查状态
-        env:
-          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
-          SPACE: ${{ needs.deploy-worker.outputs.space_first }}
-        run: |
-          npm install --no-save puppeteer-core@23 > /dev/null 2>&1
-          DOMAIN="${KEEPALIVE_DOMAIN#https://}"
-          node .github/scripts/ide-exec.js "https://$DOMAIN/ide/$SPACE" "$(which google-chrome)" \
-            --sync \
-            --expect "HTTP"
-
   summary:
     name: 部署摘要
     runs-on: ubuntu-latest
-    needs: [deploy-worker, deploy-vps]
+    needs: [deploy-worker]
     if: always()
     steps:
       - name: 输出结果
@@ -153,7 +126,6 @@ jobs:
           echo "| 步骤 | 状态 |" >> "$GITHUB_STEP_SUMMARY"
           echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
           echo "| Cloudflare Worker | ${{ needs.deploy-worker.result }} |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| VPS 启动链 | ${{ needs.deploy-vps.result == 'skipped' && '跳过(勾了 skip_vps)' || needs.deploy-vps.result }} |" >> "$GITHUB_STEP_SUMMARY"
 
   cleanup-summary:
     name: 说明
@@ -166,5 +138,4 @@ jobs:
           ## 说明
           - 部署用的临时 CF token 已在部署后自动删除,只留 Global API Key 作为长期凭证
           - spaceKey 由腾讯云密钥调 DescribeWorkspaces 自动发现,无需手填
-          - VPS 部署通过 Worker /ide/<space> 网页终端通道完成,无需 SSH
           EOF
