@@ -3,6 +3,8 @@
 // Secret(可选): BROWSERLESS_KEY — 重启后打开网页 IDE 触发 preview.yml
 //   (现已有每小时铸 token + Actions Chrome 的 vps-boot.yml 兜底,不配也能自愈)
 // Vars: SPACE_KEYS 逗号分隔的工作区 key(留空则只有 WORKER_DEFAULT_SPACE_KEY)
+// 端点:/ 或 /ide/<space> → 302 进网页 IDE 终端(根路径自动选第一个工作区)
+//      /heart/<space> 心跳 | /start/<space> /start/all 开机 | /stop/<space> 关机 | /scheduled(cron)
 
 // 访问网页 IDE,等待终端加载完成 -> 触发 preview.yml autoOpen 启动应用
 const openIde = (spaceKey, token, browserlessKey) => {
@@ -55,7 +57,7 @@ async function scheduled(event, env, ctx) {
 
 async function fetchHandler(request, env, ctx) {
   const url = new URL(typeof request === "string" ? request : request.url);
-  const spaceKey = url.pathname.replace(/(.*\/)/, "");
+  let spaceKey = url.pathname.replace(/(.*\/)/, "");
 
   if (url.pathname.includes("/scheduled")) {
     await scheduled(request, env, ctx);
@@ -73,7 +75,10 @@ async function fetchHandler(request, env, ctx) {
   const isStop = url.pathname.includes("/stop");
   const isHeart = url.pathname.includes("/heart");
   const isIde = url.pathname.includes("/ide");
-  if (!(isStart || isStop || isHeart || isIde)) return new Response("Not Found", { status: 404 });
+  // 根路径也当 IDE 入口:自动选第一个工作区(多工作区时用 /ide/<space> 精确指定)
+  const isRoot = url.pathname === "/";
+  if (!(isStart || isStop || isHeart || isIde || isRoot)) return new Response("Not Found", { status: 404 });
+  if (isRoot) spaceKey = getSpaceKeys(env)[0];
 
   const action = isStart ? "RunWorkspace" : isStop ? "StopWorkspace" : "CreateWorkspaceToken";
 
@@ -105,7 +110,7 @@ async function fetchHandler(request, env, ctx) {
           method: "GET",
         });
       }
-      if (isIde) {
+      if (isIde || isRoot) {
         // 302(不缓存):token 是一次性的,301 会被浏览器缓存导致下次跳旧 token
         return Response.redirect(
           `https://ide.cloud.tencent.com/tty/${spaceKey}/?report_open_type=list_open&token=${token}`,
