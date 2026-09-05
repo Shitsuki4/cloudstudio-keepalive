@@ -1,16 +1,18 @@
 name: Keepalive IDE Boot
 
-# 每小时免 SSH 打开一次网页 IDE + 终端通道自检:
+# 免 SSH 打开网页 IDE + 终端通道(手动 dispatch 触发,不再定时跑):
 #
 # 主通道:runner 自带 Chrome + 云 API 铸的 workspace token 打开 tty 页面
 #   → 工作区若装有 /workspace/.vscode/preview.yml 则触发 autoOpen 启动链(没装也无害,
 #     IDE 打开本身刷新活跃状态)。不依赖 browserless(付费)也不依赖 SSH accessToken(7 天轮换)
 # 终端通道(可选):通过 Worker 入口(根路径或 /ide/<space> 端点)打开网页终端,执行命令读回输出,
 #   可当免 SSH 的通用远程执行器用。失败不阻塞主通道
+#
+# 2026-09-05 移除每小时 schedule:GitHub Actions 对免费仓库的 schedule 丢槽严重
+# (实测 ~48 槽只 fire ~11 次),且保活实测只靠 Worker 每分钟心跳就足够,IDE 打开
+# 只是活跃度加成——与其依赖一条时跑时不跑的定时,不如需要时手动 Run workflow
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "13 * * * *" # 每小时 :13(UTC,避开 GitHub Actions 整点队列高峰,schedule 高峰期会挤掉延迟任务)
 
 jobs:
   boot:
