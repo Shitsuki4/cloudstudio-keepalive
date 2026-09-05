@@ -5,6 +5,7 @@
 // Vars: SPACE_KEYS 逗号分隔的工作区 key(留空则只有 WORKER_DEFAULT_SPACE_KEY)
 // 端点:/ 或 /ide/<space> → 302 进网页 IDE 终端(根路径自动选第一个工作区)
 //      /heart/<space> 心跳 | /start/<space> /start/all 开机 | /stop/<space> 关机 | /scheduled(cron)
+//      /status 全部工作区状态 | 心跳失败且工作区明确关机 → 自动 RunWorkspace 唤醒(见 tryWake)
 
 // 访问网页 IDE,等待终端加载完成 -> 触发 preview.yml autoOpen 启动应用
 const openIde = (spaceKey, token, browserlessKey) => {
@@ -55,6 +56,38 @@ async function scheduled(event, env, ctx) {
   }
 }
 
+// --- 关机自动唤醒 ---
+// 心跳链失败(铸 token 抛错或心跳非 200)→ 查 DescribeWorkspaces,**状态明确是关机才** RunWorkspace:
+//  - 只认 STOPPED 黑名单(见 STOPPED_STATUS),认不出的状态一律不动——最坏=维持原状等每天 04:00 重启兜底,
+//    绝不冒"把在跑的工作区误重启"的险;限流抖动时 DescribeWorkspaces 也会挂(直接跳过),双保险
+//  - INVALID(已回收)不唤;每 5 分钟最多试一次(防持续失败时反复重启)
+const STOPPED_STATUS = new Set(["STOPPED", "Stopped", "STOP", "Stop", "SHUTDOWN", "Shutdown", "OFF", "Off"]);
+
+// DescribeWorkspaces:payload 必须是 {}(不收分页参数);响应在 Response.Data(可能是裸数组或带 WorkspaceList)
+async function describeWorkspaces(env) {
+  const desc = await runTencentCloudAPI(env, "", "DescribeWorkspaces", {});
+  let rows = desc.Response.Data || desc.Response.WorkspaceList || [];
+  if (rows && !Array.isArray(rows)) rows = rows.WorkspaceList || [];
+  return rows;
+}
+
+async function tryWake(env, spaceKey, reason) {
+  if (new Date().getUTCMinutes() % 5 !== 0) return;
+  try {
+    const rows = await describeWorkspaces(env);
+    const ws = rows.find((w) => w.SpaceKey === spaceKey || (!w.SpaceKey && w.Name === spaceKey));
+    const st = ws ? String(ws.Status || "") : null;
+    if (!st || st === "INVALID") return console.log(`唤醒跳过: ${spaceKey} 状态 ${st || "找不到"}`);
+    if (!STOPPED_STATUS.has(st))
+      return console.log(`唤醒跳过: ${spaceKey} 状态 ${st} 非明确关机,心跳失败(${reason})当抖动处理`);
+    console.log(`自动唤醒: ${spaceKey} 状态 ${st}(${reason})→ RunWorkspace`);
+    const res = await runTencentCloudAPI(env, spaceKey, "RunWorkspace");
+    console.log("RunWorkspace:", JSON.stringify(res.Response).slice(0, 200));
+  } catch (e) {
+    console.log("唤醒检查失败(多半限流,下个 5 分钟窗口再试):", e.message);
+  }
+}
+
 async function fetchHandler(request, env, ctx) {
   const url = new URL(typeof request === "string" ? request : request.url);
   let spaceKey = url.pathname.replace(/(.*\/)/, "");
@@ -62,6 +95,12 @@ async function fetchHandler(request, env, ctx) {
   if (url.pathname.includes("/scheduled")) {
     await scheduled(request, env, ctx);
     return json("completed");
+  }
+
+  // 查全部工作区状态(排查/验证用,只读)
+  if (url.pathname.includes("/status")) {
+    const rows = await describeWorkspaces(env);
+    return json({ workspaces: rows.map((w) => ({ spaceKey: w.SpaceKey, name: w.Name, status: w.Status })) });
   }
 
   if (url.pathname.includes("/start/all")) {
@@ -101,7 +140,7 @@ async function fetchHandler(request, env, ctx) {
     if (action === "CreateWorkspaceToken") {
       const token = response.Response.Token;
       if (isHeart) {
-        return fetch(`https://ide.cloud.tencent.com/api/workspace/${spaceKey}/heartbeat`, {
+        const hb = await fetch(`https://ide.cloud.tencent.com/api/workspace/${spaceKey}/heartbeat`, {
           headers: {
             authorization: `Bearer ${token}`,
             "x-ide-workspace-session-id": `baa4d673-2hg6-4014-861a-${(Date.now() + "").slice(1, 13)}`,
@@ -109,6 +148,8 @@ async function fetchHandler(request, env, ctx) {
           body: null,
           method: "GET",
         });
+        if (!hb.ok) await tryWake(env, spaceKey, `heartbeat HTTP ${hb.status}`);
+        return hb;
       }
       if (isIde || isRoot) {
         // 302(不缓存):token 是一次性的,301 会被浏览器缓存导致下次跳旧 token
@@ -121,6 +162,8 @@ async function fetchHandler(request, env, ctx) {
 
     return json({ Success: response });
   } catch (error) {
+    // 铸 token 失败(除限流外多半是工作区关了)→ 查状态,非运行态就自动唤醒
+    if (isHeart) await tryWake(env, spaceKey, error.message);
     return json({ Error: error.message }, 500);
   }
 }
@@ -174,7 +217,7 @@ function getDate(timestamp) {
   ).padStart(2, "0")}`;
 }
 
-async function runTencentCloudAPI(env, spaceKey, action = "RunWorkspace") {
+async function runTencentCloudAPI(env, spaceKey, action = "RunWorkspace", payloadOverride) {
   if (!env.TENCENT_SECRET_ID || !env.TENCENT_SECRET_KEY) {
     throw new Error("Missing TENCENT_SECRET_ID / TENCENT_SECRET_KEY");
   }
@@ -184,7 +227,8 @@ async function runTencentCloudAPI(env, spaceKey, action = "RunWorkspace") {
   const version = "2023-05-08";
   const timestamp = Math.floor(Date.now() / 1000);
   const date = getDate(timestamp);
-  const payload = JSON.stringify({ SpaceKey: spaceKey });
+  // DescribeWorkspaces 的 payload 必须是 {}(不收分页参数),其余 action 都是 {SpaceKey}
+  const payload = JSON.stringify(payloadOverride !== undefined ? payloadOverride : { SpaceKey: spaceKey });
 
   const canonicalHeaders = `content-type:application/json; charset=utf-8\nhost:${host}\n`;
   const hashedRequestPayload = await getHash(payload);
