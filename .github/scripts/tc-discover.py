@@ -75,6 +75,7 @@ if dead:
 rows = [w for w in rows if w.get("Status") != "INVALID"]
 # 注意:Name 是工作区显示名(如 "free"),SpaceKey 才是 API 用的真实 key —— 必须优先 SpaceKey
 keys = [w.get("SpaceKey") or w.get("Name") for w in rows]
+print("status:", {w.get("SpaceKey") or w.get("Name"): w.get("Status") for w in rows})
 print("workspaces:", keys)
 if not keys:
     print("该账号下没有 CloudStudio 工作区——请先到 https://ide.cloud.tencent.com 创建"); sys.exit(1)
