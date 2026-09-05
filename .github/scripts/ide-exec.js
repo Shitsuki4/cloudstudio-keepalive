@@ -130,25 +130,36 @@ function buildSyncCommands() {
         await page.keyboard.up("Control");
       } catch {}
     }
+    let terminalFrame = null;
+    async function findTerminal() {
+      for (const frame of page.frames()) {
+        const candidate = await frame.$("textarea.xterm-helper-textarea").catch(() => null);
+        if (candidate) {
+          terminalFrame = frame;
+          return candidate;
+        }
+      }
+      return null;
+    }
     let ta = null;
     for (let i = 0; i < 30 && !ta; i++) {
       await new Promise((r) => setTimeout(r, 3000));
-      ta = await page.$("textarea.xterm-helper-textarea, textarea");
+      ta = await findTerminal();
       if (!ta) await nudgeTerminal();
     }
     if (!ta) {
       // 偶发加载慢/终端未挂载:重新加载页面再等一轮
       console.log("!! 首轮 90s 未找到 textarea,重新加载页面重试…");
-      try { await page.goto(page.url(), { waitUntil: "domcontentloaded", timeout: 60000 }); } catch {}
+      try { await page.goto(ideUrl, { waitUntil: "domcontentloaded", timeout: 60000 }); } catch {}
       for (let i = 0; i < 20 && !ta; i++) {
         await new Promise((r) => setTimeout(r, 3000));
-        ta = await page.$("textarea.xterm-helper-textarea, textarea");
+        ta = await findTerminal();
         if (!ta) await nudgeTerminal();
       }
     }
     if (!ta) {
       console.error("!!! 终端 textarea 仍未出现");
-      console.log("url:", page.url());
+      console.log("url:", new URL(page.url()).origin + new URL(page.url()).pathname);
       console.log("body:", (await page.evaluate(() => document.body.innerText.slice(0, 600)).catch(() => "")).replace(/\n/g, "\\n"));
       await page.screenshot({ path: "/tmp/ide-exec-fail.png" }).catch(() => {});
       process.exitCode = 1; return;
@@ -172,7 +183,7 @@ function buildSyncCommands() {
       if (!ready()) console.log("!! 提示符不稳定(启动链可能仍在输出),仍继续");
     }
 
-    await page.evaluate(() => {
+    await terminalFrame.evaluate(() => {
       const x = document.querySelector(".xterm");
       if (x) x.click();
       const t = document.querySelector("textarea.xterm-helper-textarea, textarea");
@@ -188,23 +199,33 @@ function buildSyncCommands() {
       const marker = `${sentinel}_${i}`;
       console.log(`\n>>> [${i + 1}/${commands.length}] ${c.length > 120 ? c.slice(0, 120) + "…" : c}`);
       termBuf.clear();
-      await ta.type(`${c}\n; echo ${marker} $?\n`, { delay: 8 }).catch((e) => console.log("type fail:", e.message));
+      await ta.focus();
+      await page.keyboard.sendCharacter(`printf '%s' '${b64(c)}' | base64 -d | bash; printf '\\n%s:%s\\n' '${marker}' "$?"`);
+      await page.keyboard.press("Enter");
 
       // 等 sentinel 出现(或超时)
       let ok = false;
+      let completion = null;
+      const completedLine = new RegExp(`(?:^|\\n)${marker}:(\\d+)\\r?(?:\\n|$)`);
       for (let w = 0; w < 120; w++) {
         await new Promise((r) => setTimeout(r, 1000));
-        if (allText().includes(marker)) { ok = true; break; }
+        completion = allText().match(completedLine);
+        if (completion) { ok = true; break; }
       }
       const out = allText();
       lastOut = out;
       // 截取 sentinel 前内容作为本条输出
-      const idx = out.indexOf(marker);
+      const idx = completion ? completion.index : -1;
       const body = idx >= 0 ? out.slice(0, idx) : out;
       const tail = stripAnsi(body).replace(/^\s*\S*\s*$/, "").trim();
       console.log(`--- 输出(${ok ? "OK" : "超时"}):`);
       console.log(tail.slice(-1500) || "(空)");
       if (!ok) { console.error(`!!! 命令 ${i + 1} 120s 无 sentinel 回显`); process.exitCode = 1; break; }
+      if (Number(completion[1]) !== 0) {
+        console.error(`!!! 命令 ${i + 1} exit=${completion[1]}`);
+        process.exitCode = 1;
+        break;
+      }
       await new Promise((r) => setTimeout(r, 300));
     }
 
