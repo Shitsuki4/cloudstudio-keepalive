@@ -44,7 +44,7 @@
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
 - **每天 04:00(北京)重启工作区**:Worker 调 `RunWorkspace`,容器重建(进程清零,`/workspace` 数据幸存),之后心跳继续,工作区永不因空闲被回收
-- **关机自动唤醒**(`tryWake`):心跳链失败(铸 token 抛错或心跳非 200)→ Worker 查 `DescribeWorkspaces`,**状态明确是关机才** `RunWorkspace` 拉起(手动关机最迟 5 分钟内自动爬起)。安全设计:只认 STOPPED 黑名单,认不出的状态一律不动——最坏=维持原状等每天 04:00 重启兜底,绝不误重启在跑的工作区;已回收(INVALID)不唤;每 5 分钟最多试一次
+- **关机自动唤醒**(`tryWake`):心跳链失败(铸 token 抛错、心跳非 200、或心跳 body 报 `evict:true`——关机工作区心跳仍返 200,实测 `cause:NOT_RUNNING`)→ Worker 查 `DescribeWorkspaces`,**状态明确是关机才** `RunWorkspace` 拉起(手动关机最迟 5 分钟内自动爬起)。安全设计:只认 STOPPED 黑名单,认不出的状态一律不动——最坏=维持原状等每天 04:00 重启兜底,绝不误重启在跑的工作区;已回收(INVALID)不唤;每 5 分钟最多试一次
 - **`/status` 端点**:`https://<KEEPALIVE_DOMAIN>/status` 只读查全部工作区状态(排查用)
 - **每小时免 SSH 打开网页 IDE**(`vps-boot.yml`):Actions 用腾讯云密钥铸 workspace token(~10 分钟有效),runner Chrome 打开 tty 页面——工作区装有 `/workspace/.vscode/preview.yml` 时触发 autoOpen 启动链;配套 `ide-exec.js` 终端通道(打开 `https://<KEEPALIVE_DOMAIN>` 根路径,Worker 自动选工作区并 302 进网页终端;多工作区用 `/ide/<spaceKey>` 精确指定)可免 SSH 执行任意命令读回输出,SSH accessToken 7 天轮换不再依赖
 - **改代码后再部署**:push `worker/**` 自动触发,或手动 Run workflow
