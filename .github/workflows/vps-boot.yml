@@ -10,7 +10,7 @@ name: Keepalive IDE Boot
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7 * * * *" # 每小时 :07(UTC)
+    - cron: "13 * * * *" # 每小时 :13(UTC,避开 GitHub Actions 整点队列高峰,schedule 高峰期会挤掉延迟任务)
 
 jobs:
   boot:
