@@ -9,9 +9,20 @@ jobs:
         with:
           node-version: "20"
       - name: worker JS 语法检查
-        run: node --check worker/start.js
+        run: |
+          node --check worker/start.js
+          for script in .github/scripts/*.js; do node --check "$script"; done
       - name: bash 语法检查
         run: |
-          for f in .github/scripts/*.sh; do
+          for f in .github/scripts/*.sh startup/*.sh; do
             bash -n "$f" && echo "OK $f"
           done
+      - name: Python 语法检查
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          for script in Path('.github/scripts').glob('*.py'):
+              ast.parse(script.read_text(encoding='utf-8'), filename=str(script))
+              print('OK', script)
+          PY
