@@ -39,6 +39,29 @@
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
 4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
 
+## 原生开机启动（可选，需先确认原钩子）
+
+腾讯云 [Lifecycle.Start](https://cloud.tencent.com/document/product/1039/94097#LifeCycle) 定义为“每次工作空间启动时执行”。原生钩子直接调用启动脚本，不需要 Actions 定时任务、SSH 或浏览器触发 `preview.yml`。当前实现提交配置后不自动重启，实际触发效果需要单独停启验收。
+
+1. 首次运行 **Keepalive Setup** 时勾选 `initialize_startup`；已有部署可单独运行 **Keepalive Startup Setup**。
+2. `space_key` 在账号只有一个有效工作区时可留空，多工作区必须明确指定。
+3. `lifecycle_baseline` 填写当前完整 Lifecycle JSON；**只有确认没有旧钩子时才填 `{}`**。官方列表 API 不返回原钩子，因此不自动猜测为空，未填写会安全停止。
+4. 流程等待 Worker 部署成功，备份生命周期计划，安装文件，再注册 `Lifecycle.Start`。未托管或被用户改过的 `preview.yml` 保留；不覆盖未知 `boot.sh`。
+5. 下载 Actions 的 `lifecycle-backup-*` 回滚文件并长期保存，平台只保留 7 天。基线输入和备份不要包含密钥；现有钩子若包含敏感命令，应改用受保护的本地文件流程，不填入 Actions 表单。
+
+安装内容：
+
+- `/workspace/.keepalive/boot.sh`：带锁的启动入口，依次调用 `start.d/*.sh`，不自带业务应用。
+- `/workspace/.keepalive/start.d/`：放你的幂等服务启动脚本，脚本自行后台化和检查健康，不能无限阻塞；启动锁不会被服务子进程继承。
+- `/workspace/.keepalive/logs/boot.log`、`last-start.txt`：启动来源、时间与命令结果；没有服务时明确记录 `no_services_configured`，不冒充应用健康。
+- `/workspace/.vscode/preview.yml`：文件不存在时安装；默认 `autoOpen: false`，避免打开 IDE 重复启动，原生钩子不依赖它。
+
+`ModifyWorkspace` 成功不等于钩子执行成功；必须在没有 IDE/Actions 参与的真正启动中确认 `source=lifecycle`。对运行态重复调用 `RunWorkspace` 是否重建、是否重跑钩子，不能仅凭官方“运行空间”的描述保证。维护窗口前不要主动停机。
+
+回滚时，先核对当前配置没有发生其他变更，再在已配置腾讯云环境变量的终端运行 `python3 .github/scripts/lifecycle.py restore --plan /absolute/path/lifecycle-plan.json`。这是恢复完整基线的操作，不会自动停止或启动空间。
+
+详细官方依据与验收方案见 [原生开机启动方案](2026-09-05_技术方案-cloudstudio-lifecycle-report.md)。
+
 ## 工作方式
 
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
