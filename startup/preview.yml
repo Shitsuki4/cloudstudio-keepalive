@@ -1,0 +1,7 @@
+apps:
+  - name: workspace-services
+    root: .
+    run: bash /workspace/.keepalive/boot.sh ide
+    port:
+    autoOpen: false
+    autoPreview: false
