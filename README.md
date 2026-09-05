@@ -8,6 +8,7 @@
 ┌─ Cloudflare Worker(每分钟 cron)────────────────┐
 │  ① /heart/<space>   心跳 → 工作区 evict:false 不回收 │
 │  ② 每天 04:00(北京) RunWorkspace 重启工作区       │
+│  ③ / 或 /ide/<space> 302 进网页 IDE 终端(免 SSH)   │
 └────────────────────────────────────────────────┘
 ```
 
@@ -42,7 +43,7 @@
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
 - **每天 04:00(北京)重启工作区**:Worker 调 `RunWorkspace`,容器重建(进程清零,`/workspace` 数据幸存),之后心跳继续,工作区永不因空闲被回收
-- **每小时免 SSH 打开网页 IDE**(`vps-boot.yml`):Actions 用腾讯云密钥铸 workspace token(~10 分钟有效),runner Chrome 打开 tty 页面——工作区装有 `/workspace/.vscode/preview.yml` 时触发 autoOpen 启动链;配套 `ide-exec.js` 终端通道(经 Worker `/ide/<space>` 302 进网页终端)可免 SSH 执行任意命令读回输出,SSH accessToken 7 天轮换不再依赖
+- **每小时免 SSH 打开网页 IDE**(`vps-boot.yml`):Actions 用腾讯云密钥铸 workspace token(~10 分钟有效),runner Chrome 打开 tty 页面——工作区装有 `/workspace/.vscode/preview.yml` 时触发 autoOpen 启动链;配套 `ide-exec.js` 终端通道(打开 `https://<KEEPALIVE_DOMAIN>` 根路径,Worker 自动选工作区并 302 进网页终端;多工作区用 `/ide/<spaceKey>` 精确指定)可免 SSH 执行任意命令读回输出,SSH accessToken 7 天轮换不再依赖
 - **改代码后再部署**:push `worker/**` 自动触发,或手动 Run workflow
 
 ## 目录结构
