@@ -5,7 +5,7 @@ name: Keepalive IDE Boot
 # 主通道:runner 自带 Chrome + 云 API 铸的 workspace token 打开 tty 页面
 #   → 工作区若装有 /workspace/.vscode/preview.yml 则触发 autoOpen 启动链(没装也无害,
 #     IDE 打开本身刷新活跃状态)。不依赖 browserless(付费)也不依赖 SSH accessToken(7 天轮换)
-# 终端通道(可选):通过 Worker /ide/<space> 端点打开网页终端,执行命令读回输出,
+# 终端通道(可选):通过 Worker 入口(根路径或 /ide/<space> 端点)打开网页终端,执行命令读回输出,
 #   可当免 SSH 的通用远程执行器用。失败不阻塞主通道
 on:
   workflow_dispatch:
@@ -39,9 +39,9 @@ jobs:
         continue-on-error: true
         env:
           KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
-          SPACE: ${{ steps.mint.outputs.space }}
         run: |
           DOMAIN="${KEEPALIVE_DOMAIN#https://}"
-          node .github/scripts/ide-exec.js "https://$DOMAIN/ide/$SPACE" "$(which google-chrome)" \
+          # 根路径即 IDE 入口(自动选第一个工作区),多工作区可用 https://$DOMAIN/ide/$SPACE 精确指定
+          node .github/scripts/ide-exec.js "https://$DOMAIN" "$(which google-chrome)" \
             --cmd "date; uptime; df -h /workspace | tail -1; echo CHECK_\$((6*7))" \
             --expect "CHECK_42"
