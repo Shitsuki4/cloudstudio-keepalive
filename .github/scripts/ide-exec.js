@@ -1,12 +1,13 @@
 // ide-exec.js — 在网页 IDE 终端里执行命令并读回输出,彻底取代 SSH(免 accessToken 7 天轮换)
 //
-// 原理:通过 runner Chrome 打开 Worker 的 /ide/<space> 端点 → Worker 当场铸 token 并 302 到 tty 页面
+// 原理:通过 runner Chrome 打开 Worker 入口(根路径或 /ide/<space> 端点)→ Worker 当场铸 token 并 302 到 tty 页面
 //   (xterm 终端)。终端 I/O 走同一条 WebSocket,输出以 {"id":N,"event":"..."} 文本帧回传,
 //   直接从 WS 帧读回,绕过 DOM/canvas。打字用 xterm 的 helper textarea,命令末尾追加 sentinel 判完成。
 //
 // 用法:
 //   node ide-exec.js <ideUrl> [chromePath] [--cmd "..."] [--file f] [--sync] [--expect "marker"]
-//   ideUrl        Worker /ide/<space> 端点,如 https://keepalive.example.eu.org/ide/qligjr
+//   ideUrl        Worker 入口,如 https://keepalive.example.eu.org(根路径自动选第一个工作区)
+//                 或 https://keepalive.example.eu.org/ide/qligjr(多工作区时精确指定)
 //   --cmd "..."   要执行的 shell 命令(可多次,按顺序执行)
 //   --file f      从文件读取命令(逐行,空行/# 跳过)
 //   --sync        内置同步:把 ../../vps/* 文件 base64 写入工作区并跑启动链(部署用)
