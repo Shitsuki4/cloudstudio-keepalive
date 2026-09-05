@@ -42,6 +42,7 @@
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
 - **每天 04:00(北京)重启工作区**:Worker 调 `RunWorkspace`,容器重建(进程清零,`/workspace` 数据幸存),之后心跳继续,工作区永不因空闲被回收
+- **每小时免 SSH 打开网页 IDE**(`vps-boot.yml`):Actions 用腾讯云密钥铸 workspace token(~10 分钟有效),runner Chrome 打开 tty 页面——工作区装有 `/workspace/.vscode/preview.yml` 时触发 autoOpen 启动链;配套 `ide-exec.js` 终端通道(经 Worker `/ide/<space>` 302 进网页终端)可免 SSH 执行任意命令读回输出,SSH accessToken 7 天轮换不再依赖
 - **改代码后再部署**:push `worker/**` 自动触发,或手动 Run workflow
 
 ## 目录结构
@@ -53,9 +54,13 @@ worker/
 .github/
   scripts/cf-token.py     Global Key → 临时 token + zone/account 自动发现
   scripts/tc-discover.py  腾讯云密钥 → spaceKey 自动发现
+  scripts/tc-wtoken.py    腾讯云密钥 → workspace token 铸造(TC3,~10 分钟有效,免 SSH 打开网页 IDE)
+  scripts/open-ide.js     用 runner Chrome 打开网页 IDE(有 preview.yml 则触发 autoOpen)
+  scripts/ide-exec.js     网页终端执行器:铸 token → 打开 IDE → 终端执行命令读回输出,免 SSH
   scripts/bind-route.sh   DNS A 记录 + workers route 绑定
   workflows/setup.yml     首次引导(校验 → 部署)
   workflows/deploy.yml    主部署(CF Worker + 自定义域路由 + 心跳验证)
+  workflows/vps-boot.yml  每小时铸 token 打开网页 IDE + 终端通道自检(免 SSH)
   workflows/ci.yml        push 语法 lint
 ```
 
