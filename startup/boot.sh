@@ -5,7 +5,7 @@ umask 077
 startup_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 source_name="${1:-manual}"
 case "$source_name" in
-  lifecycle|ide|manual) ;;
+  lifecycle|ide|manual|supervisor) ;;
   *) printf 'Invalid startup source\n' >&2; exit 2 ;;
 esac
 
