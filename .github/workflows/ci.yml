@@ -17,6 +17,8 @@ jobs:
           for f in .github/scripts/*.sh startup/*.sh; do
             bash -n "$f" && echo "OK $f"
           done
+          grep -q 'supervisor' startup/boot.sh
+          grep -q 'keepalive-boot' startup/keepalive-boot.conf
       - name: Python 语法检查
         run: |
           python3 - <<'PY'
@@ -26,3 +28,5 @@ jobs:
               ast.parse(script.read_text(encoding='utf-8'), filename=str(script))
               print('OK', script)
           PY
+      - name: 启动安装器测试
+        run: python3 -m unittest discover -s tests -v
