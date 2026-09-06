@@ -192,6 +192,8 @@ mkdir -p /workspace/.keepalive && date -u '+%Y-%m-%dT%H:%M:%SZ lifecycle-start' 
 
 ## 8. 待验证事项
 
+回滚范围需要分开记录：`lifecycle.py restore --plan ...` 只恢复腾讯云 Lifecycle 基线；安装器生成的 `rollback` 命令只恢复 `/workspace` 与 `/usr/local/share/supervisor` 中本方案的受管文件。文件 rollback 在当前受管文件被外部修改、符号链接或备份完整性失败时拒绝执行，不删除 `start.d`、日志或其他用户文件。新版安装状态绑定备份 manifest 摘要；旧安装器生成的未认证 state/backup 不静默迁移，应使用当次 Actions 保存的原始 rollback 命令或人工核验后重装。`KEEPALIVE_INSTALL_OK` 只表示文件事务完成并通过本地读回校验，不表示活动 Supervisor 已加载 include，也不表示 Lifecycle 钩子已经执行。网络超时或断线后的 Lifecycle 结果可能未知，必须人工检查后再决定是否进行文件回滚。
+
 1. 目标空间类型、权限是否支持并实际执行 `Lifecycle`。
 2. 配置何时生效，修改对运行态空间是否有即时副作用。
 3. 如何安全读回原配置，未指定阶段及原命令是保留还是替换。

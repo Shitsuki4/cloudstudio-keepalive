@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-from tencent_api import call, workspaces
+from tencent_api import call, TransportError, workspaces
 
 
 MANAGED_NAME = "keepalive-boot"
@@ -100,7 +100,23 @@ def main():
     if desired != with_startup(original):
         raise ValueError("Lifecycle plan contains unexpected changes")
     lifecycle = desired if arguments.operation == "apply" else original
-    result = call("ModifyWorkspace", {"SpaceKey": selected, "Lifecycle": lifecycle})
+    try:
+        result = call("ModifyWorkspace", {"SpaceKey": selected, "Lifecycle": lifecycle})
+    except TransportError as error:
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                output.write("result=unknown\n")
+        raise RuntimeError(
+            f"Lifecycle {arguments.operation} result is unknown after transport failure; inspect the workspace before rollback"
+        ) from error
+    except RuntimeError:
+        if os.environ.get("GITHUB_OUTPUT"):
+            with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+                output.write("result=rejected\n")
+        raise
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+            output.write("result=accepted\n")
     print(f"Lifecycle {arguments.operation} accepted for {selected}; RequestId={result.get('RequestId')}")
     print("No workspace restart requested. A successful API response does not prove startup execution.")
 

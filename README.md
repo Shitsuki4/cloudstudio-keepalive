@@ -55,13 +55,13 @@
 - `/workspace/.keepalive/start.d/`：放你的幂等服务启动脚本，脚本自行后台化和检查健康，不能无限阻塞；启动锁不会被服务子进程继承。
 - `/workspace/.keepalive/logs/boot.log`、`last-start.txt`：启动来源、时间与命令结果；没有服务时明确记录 `no_services_configured`，不冒充应用健康。
 - `/workspace/.vscode/preview.yml`：文件不存在时安装；默认 `autoOpen: false`，避免打开 IDE 重复启动，原生钩子不依赖它。
-- `/workspace/.keepalive/supervisor-start.sh` 与 `/usr/local/share/supervisor/keepalive-boot.conf`：镜像原生 `supervisord` 的自动启动入口。配置由 supervisor include 目录加载，调用同一份 `boot.sh`，来源记录为 `supervisor`；安装器会备份并拒绝覆盖外部修改。
+- `/workspace/.keepalive/supervisor-start.sh`、`/workspace/.keepalive/keepalive-boot.conf` 与 `/usr/local/share/supervisor/keepalive-boot.conf`：镜像原生 `supervisord` 的自动启动入口。安装前会读取活动 `supervisord` 配置并确认 `[include] files` 实际匹配运行时副本；不匹配或无法确认时停止，不修改主配置。安装器会备份并拒绝覆盖外部修改。`KEEPALIVE_INSTALL_OK` 只表示文件事务成功，不表示 Supervisor 已加载或钩子已经执行。
 
-在当前 CloudStudio 镜像中，PID 1 使用 `/.PlnPyKFp4CRfFtgC1/bin/supervisord -c /.PlnPyKFp4CRfFtgC1/supervisord-conf/supervisord.conf`，其配置加载 `/usr/local/share/supervisor/*.conf`。该 supervisor 通道已在真实 `STOPPED`→`RUNNING` 重建中验证：容器启动后 include 配置被加载，并在随后调用 `boot.sh`。其他镜像必须先确认存在相同 include 目录与启动命令；安装器遇到缺失目录会停止，不会伪造成功。
+在当前 CloudStudio 镜像中，PID 1 使用 `/.PlnPyKFp4CRfFtgC1/bin/supervisord -c /.PlnPyKFp4CRfFtgC1/supervisord-conf/supervisord.conf`；部署前仍应由安装器确认活动配置加载 `/usr/local/share/supervisor/*.conf`。Supervisor 运行时副本位于非 `/workspace` 路径，镜像重建后是否持久必须现场确认；如果副本丢失，应先由持久副本补齐并重新做冷启动验收。其他镜像必须先确认相同 include 目录与启动命令；安装器无法证明时会停止，不会伪造成功。
 
 `ModifyWorkspace` 成功不等于钩子执行成功；必须在没有 IDE/Actions 参与的真正启动中确认 `source=lifecycle` 或 `source=supervisor`。对运行态重复调用 `RunWorkspace` 是否重建、是否重跑钩子，不能仅凭官方“运行空间”的描述保证。维护窗口前不要主动停机。
 
-回滚时，先核对当前配置没有发生其他变更，再在已配置腾讯云环境变量的终端运行 `python3 .github/scripts/lifecycle.py restore --plan /absolute/path/lifecycle-plan.json`。这是恢复完整基线的操作，不会自动停止或启动空间。
+回滚有两个互不替代的范围：`lifecycle.py restore --plan ...` 恢复腾讯云 Lifecycle 基线；安装器生成的 `rollback` 命令恢复 `/workspace` 与 `/usr/local/share/supervisor` 中本方案的受管文件。文件 rollback 会在当前文件被外部修改时拒绝执行，不删除 `start.d`、日志或其他用户文件。新版安装状态绑定备份 manifest 摘要；旧安装器生成的未认证 state/backup 不会被静默迁移，需使用当次 Actions 保存的原始 rollback 命令或人工核验后重装。两项操作都不会自动停止或启动空间；Lifecycle API 返回不确定时应先人工核对，不要据此宣称 Lifecycle 未应用。
 
 详细官方依据与验收方案见 [原生开机启动方案](2026-09-05_技术方案-cloudstudio-lifecycle-report.md)。
 

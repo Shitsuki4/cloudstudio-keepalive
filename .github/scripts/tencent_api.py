@@ -8,6 +8,10 @@ import urllib.error
 import urllib.request
 
 
+class TransportError(RuntimeError):
+    """The request result is unknown because the API response was not usable."""
+
+
 def call(action, payload):
     secret_id = os.environ["TENCENT_SECRET_ID"]
     secret_key = os.environ["TENCENT_SECRET_KEY"]
@@ -45,11 +49,17 @@ def call(action, payload):
     )
     try:
         with urllib.request.urlopen(request, timeout=45) as response:
-            result = json.load(response).get("Response")
-    except urllib.error.HTTPError as error:
-        raise RuntimeError(f"{action}: HTTP {error.code}") from None
+            body = json.load(response)
+    except (OSError, urllib.error.HTTPError, urllib.error.URLError, TimeoutError) as error:
+        detail = f"HTTP {error.code}" if isinstance(error, urllib.error.HTTPError) else str(error)
+        raise TransportError(f"{action}: transport failure: {detail}") from None
+    except (ValueError, UnicodeError) as error:
+        raise TransportError(f"{action}: invalid API response: {error}") from None
+    if not isinstance(body, dict):
+        raise TransportError(f"{action}: invalid API response")
+    result = body.get("Response")
     if not isinstance(result, dict):
-        raise RuntimeError(f"{action}: invalid API response")
+        raise TransportError(f"{action}: invalid API response")
     if result.get("Error"):
         error = result["Error"]
         message = str(error.get("Message", "")).replace(secret_id, "[redacted]").replace(secret_key, "[redacted]")
