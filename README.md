@@ -55,8 +55,11 @@
 - `/workspace/.keepalive/start.d/`：放你的幂等服务启动脚本，脚本自行后台化和检查健康，不能无限阻塞；启动锁不会被服务子进程继承。
 - `/workspace/.keepalive/logs/boot.log`、`last-start.txt`：启动来源、时间与命令结果；没有服务时明确记录 `no_services_configured`，不冒充应用健康。
 - `/workspace/.vscode/preview.yml`：文件不存在时安装；默认 `autoOpen: false`，避免打开 IDE 重复启动，原生钩子不依赖它。
+- `/workspace/.keepalive/supervisor-start.sh` 与 `/usr/local/share/supervisor/keepalive-boot.conf`：镜像原生 `supervisord` 的自动启动入口。配置由 supervisor include 目录加载，调用同一份 `boot.sh`，来源记录为 `supervisor`；安装器会备份并拒绝覆盖外部修改。
 
-`ModifyWorkspace` 成功不等于钩子执行成功；必须在没有 IDE/Actions 参与的真正启动中确认 `source=lifecycle`。对运行态重复调用 `RunWorkspace` 是否重建、是否重跑钩子，不能仅凭官方“运行空间”的描述保证。维护窗口前不要主动停机。
+在当前 CloudStudio 镜像中，PID 1 使用 `/.PlnPyKFp4CRfFtgC1/bin/supervisord -c /.PlnPyKFp4CRfFtgC1/supervisord-conf/supervisord.conf`，其配置加载 `/usr/local/share/supervisor/*.conf`。该 supervisor 通道已在真实 `STOPPED`→`RUNNING` 重建中验证：容器启动后 include 配置被加载，并在随后调用 `boot.sh`。其他镜像必须先确认存在相同 include 目录与启动命令；安装器遇到缺失目录会停止，不会伪造成功。
+
+`ModifyWorkspace` 成功不等于钩子执行成功；必须在没有 IDE/Actions 参与的真正启动中确认 `source=lifecycle` 或 `source=supervisor`。对运行态重复调用 `RunWorkspace` 是否重建、是否重跑钩子，不能仅凭官方“运行空间”的描述保证。维护窗口前不要主动停机。
 
 回滚时，先核对当前配置没有发生其他变更，再在已配置腾讯云环境变量的终端运行 `python3 .github/scripts/lifecycle.py restore --plan /absolute/path/lifecycle-plan.json`。这是恢复完整基线的操作，不会自动停止或启动空间。
 
