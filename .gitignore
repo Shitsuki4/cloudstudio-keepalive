@@ -5,3 +5,8 @@ node_modules/
 .env
 *.bak
 .push-via-api.py
+gh-query.py
+gh-dispatch.py
+.artifacts/
+__pycache__/
+.tmp-sdk-models.py
