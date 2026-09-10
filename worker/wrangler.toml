@@ -12,3 +12,5 @@ crons = ["* * * * *"]
 #   KEEPALIVE_HOST  worker 入口域名,如 "https://keepalive.example.com"
 # Secrets 由 deploy.yml 自动写入(TENCENT_SECRET_ID / TENCENT_SECRET_KEY)
 [vars]
+# 真实 Stop→Run 会中断业务;验收自启链、持久化与维护窗口后才改成 "true"。
+DAILY_RESTART_ENABLED = "false"

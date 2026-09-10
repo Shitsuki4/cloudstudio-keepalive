@@ -1,0 +1,2 @@
+# Linux/CloudStudio shell scripts must remain executable after a Windows checkout.
+*.sh text eol=lf

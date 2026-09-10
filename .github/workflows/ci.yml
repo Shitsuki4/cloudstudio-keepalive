@@ -12,6 +12,8 @@ jobs:
         run: |
           node --check worker/start.js
           for script in .github/scripts/*.js; do node --check "$script"; done
+      - name: Worker 行为回归测试(模拟 API,不触碰线上)
+        run: node --test tests/worker.test.mjs
       - name: bash 语法检查
         run: |
           for f in .github/scripts/*.sh startup/*.sh; do

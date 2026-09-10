@@ -1,13 +1,15 @@
 > **⚠️ 本仓库包含部署脚本,请保持 Private!**
+>
+> **真实停启会中断业务。** 每日维护默认关闭;只有验收持久化、原生自启和维护窗口后,才将 `DAILY_RESTART_ENABLED` 设为字符串 `"true"`。推送 `main` 下的 `worker/**` 会自动部署。
 
 # CloudStudio Keepalive — 腾讯云 CloudStudio 免费工作区 24h 保活
 
-把腾讯 CloudStudio 免费工作区变成不回收的永久工作区:
+通过定时心跳和有条件的自动唤醒,尽量保持腾讯 CloudStudio 工作区运行;不承诺平台永久保留工作区或预览链接:
 
 ```
 ┌─ Cloudflare Worker(每分钟 cron)────────────────────┐
 │  ① /heart/<space>   心跳 → 工作区 evict:false 不回收     │
-│  ② 每天 04:00(北京) RunWorkspace 重启工作区             │
+│  ② 可选:每天 04:00(北京) Stop → 确认停止 → Run          │
 │  ③ / 或 /ide/<space> 302 进网页 IDE 终端(免 SSH)        │
 │  ④ /status 查全部工作区状态 | 关机自动唤醒(见下)        │
 └──────────────────────────────────────────────────┘
@@ -39,6 +41,17 @@
 3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
 4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
 
+## 启用真正的每日停启（可选，默认关闭）
+
+旧实现仅调用 `RunWorkspace`,不能据此声称正在运行的容器已重建。新流程先确认状态,仅对 `RUNNING` 发一次 `StopWorkspace`,轮询确认 `STOPPED` 后才 `RunWorkspace`,最后确认 `RUNNING`。已停止的工作区只启动;未知或过渡状态不改动。
+
+1. 先完成下面的原生启动链验收,并确认需要保存的数据在 `/workspace`、停机窗口可接受。
+2. 在 `worker/wrangler.toml` 的**现有** `[vars]` 内把 `DAILY_RESTART_ENABLED = "false"` 改为 `"true"`,再部署。默认值不会主动停掉现有业务。
+3. 每天北京时间 04:00、04:03、04:06……按去重后的 `SPACE_KEYS` 顺序维护。`/scheduled` HTTP 入口只补心跳,不能手动触发这套停启流程。
+4. API/状态确认失败会记日志,不盲目重复 Stop。关闭每日维护**不等于**关闭原有的关机自动唤醒。
+
+停机验收、超时恢复、IDE `undefined` 预览链接与验证范围见 [维护与预览排障](docs/maintenance.md)。测试只模拟接口,不代表线上停启已经验收。
+
 ## 原生开机启动（可选，需先确认原钩子）
 
 腾讯云 [Lifecycle.Start](https://cloud.tencent.com/document/product/1039/94097#LifeCycle) 定义为“每次工作空间启动时执行”。原生钩子直接调用启动脚本，不需要 Actions 定时任务、SSH 或浏览器触发 `preview.yml`。当前实现提交配置后不自动重启，实际触发效果需要单独停启验收。
@@ -69,11 +82,11 @@
 
 - **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
-- **每天 04:00(北京)重启工作区**:Worker 调 `RunWorkspace`,容器重建(进程清零,`/workspace` 数据幸存),之后心跳继续,工作区永不因空闲被回收
-- **关机自动唤醒**(`tryWake`):心跳链失败(铸 token 抛错、心跳非 200、或心跳 body 报 `evict:true`——关机工作区心跳仍返 200,实测 `cause:NOT_RUNNING`)→ Worker 查 `DescribeWorkspaces`,**状态明确是关机才** `RunWorkspace` 拉起(手动关机最迟 5 分钟内自动爬起)。安全设计:只认 STOPPED 黑名单,认不出的状态一律不动——最坏=维持原状等每天 04:00 重启兜底,绝不误重启在跑的工作区;已回收(INVALID)不唤;每 5 分钟最多试一次
+- **显式启用的每日维护**:`DAILY_RESTART_ENABLED="true"` 才执行 Stop → 等待 STOPPED → Run → 等待 RUNNING。每个状态确认阶段最多等待 90 秒,约每 5 秒检查一次,单次 API 请求最多 15 秒;使用 Cron 的 `scheduledTime` 定位维护槽位。RUNNING 只说明平台状态,不代表业务健康或 IDE 凭据已刷新
+- **关机自动唤醒**(`tryWake`):心跳链失败(铸 token 抛错、心跳非 200、或 body 报 `evict:true`)后,每逢分钟数可被 5 整除时查 `DescribeWorkspaces`,**状态明确是关机才**尝试 `RunWorkspace`;已回收、未知、运行中或过渡状态不动。API 不可用时不能保证 5 分钟内恢复。此行为不受每日维护开关控制,手动关机仍可能被唤醒
 - **`/status` 端点**:`https://<KEEPALIVE_DOMAIN>/status` 只读查全部工作区状态(排查用)
 - **免 SSH 打开网页 IDE**(`vps-boot.yml`,手动触发):Actions 用腾讯云密钥铸 workspace token(~10 分钟有效),runner Chrome 打开 tty 页面——工作区装有 `/workspace/.vscode/preview.yml` 时触发 autoOpen 启动链;配套 `ide-exec.js` 终端通道(打开 `https://<KEEPALIVE_DOMAIN>` 根路径,Worker 自动选工作区并 302 进网页终端;多工作区用 `/ide/<spaceKey>` 精确指定)可免 SSH 执行任意命令读回输出。曾经每小时定时跑,因 GitHub Actions schedule 丢槽严重(实测 ~48 槽只 fire ~11 次)且保活实测只靠心跳就够,已改为纯手动——需要时 Actions 里 Run workflow 即可
-- **改代码后再部署**:push `worker/**` 自动触发,或手动 Run workflow
+- **改代码后再部署**:push 到 `main` 且修改 `worker/**` 会自动部署;修复分支只跑 CI,不会部署。也可手动 Run workflow
 
 ## 目录结构
 
@@ -91,10 +104,19 @@ worker/
   workflows/setup.yml     首次引导(校验 → 部署)
   workflows/deploy.yml    主部署(CF Worker + 自定义域路由 + 心跳验证)
   workflows/vps-boot.yml  免 SSH 打开网页 IDE + 终端通道(手动 dispatch,不定时)
-  workflows/ci.yml        push 语法 lint
+  workflows/ci.yml        push 语法 lint + Worker/启动安装器回归测试
+tests/
+  worker.test.mjs         模拟 API 的 Worker 行为测试,不操作线上工作区
+docs/
+  maintenance.md         每日维护验收、回退与 IDE 预览排障
 ```
 
 ## 已知坑(都踩过)
+
+- **Linux 启动脚本不能使用 CRLF 换行**:否则 Bash 可能报 `pipefail: invalid option name`。仓库通过 `.gitattributes` 固定 `*.sh` 为 LF,并有源码格式回归测试;不要手工把部署脚本改回 Windows 换行。
+- **`RunWorkspace` 不等于重启正在运行的工作区**:不能把 API 成功响应当成容器重建证据;真实停启必须先 Stop 并确认状态。每日维护默认关闭,避免升级后未经确认就中断业务。
+- **IDE 预览出现 `undefined`**:在本次排查的扩展版本中,预览 URL 依赖 `get-access-url-token` 返回的 `data.token` / `data.domain`;接口 401 或空数据可能导致错误拼接。这不等于应用端口已停止,也不能仅凭 401 断言凭据有固定有效期。见[排障步骤](docs/maintenance.md#排查-ide-预览链接中的-undefined)。
+- **预览链接不保证永久有效,也不是访问控制**:工作区、端口、域名规则、网关鉴权变化都可能让旧地址失效。不要把一次测试得到的 URL 或中间字段行为当成平台契约;长期入口建议使用自己管理的域名、隧道和业务鉴权。
 
 - **workers.dev 域名被污染**:VPS 和本地都解析到假 IP,必须自定义域 + workers route
 - **无特权容器**:跑不了 docker,服务全部裸跑二进制
