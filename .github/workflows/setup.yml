@@ -60,11 +60,12 @@ jobs:
             exit 1
           fi
 
-      - name: 测试腾讯云密钥 + 发现工作区
+      - name: 测试腾讯云密钥 + 校验部署工作区
         id: discover
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          SPACE_KEYS: ${{ vars.SPACE_KEYS }}
         run: python3 .github/scripts/tc-discover.py
 
       - name: 测试 CF Global Key(找 zone)

@@ -1,5 +1,7 @@
 > **⚠️ 本仓库包含部署脚本,请保持 Private!**
 >
+> **升级部署前先设置仓库 Actions 变量 `SPACE_KEYS`。** 只填写需要保活的真实 spaceKey;未配置时部署会安全停止,不再默认纳入全部工作区。
+>
 > **真实停启会中断业务。** 每日维护默认关闭;只有验收持久化、原生自启和维护窗口后,才将 `DAILY_RESTART_ENABLED` 设为字符串 `"true"`。推送 `main` 下的 `worker/**` 会自动部署。
 
 # CloudStudio Keepalive — 腾讯云 CloudStudio 免费工作区 24h 保活
@@ -38,8 +40,12 @@
 
    > 看样例认格式:SecretId 固定 `AKID` 开头共 36 位;Global Key 是 37 位十六进制。
 
-3. **Actions → Keepalive Setup → Run workflow**(会校验密钥、自动发现你的工作区 spaceKey,然后触发部署)
-4. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
+3. **同一页面 → Variables** 添加仓库变量 `SPACE_KEYS`,填写明确要保活的真实 spaceKey,多个用英文逗号分隔。spaceKey 可从 IDE 地址 `/tty/<spaceKey>/` 获取,不是工作区显示名。
+   - 只填写需要保活的工作区,不要加入希望保持关机的空间。部署不会默认选中账号下全部工作区。
+   - 未设置、空白、格式错误、不存在或已回收的 key 都会在修改 Cloudflare 前使部署失败;不会退回全量发现。重复 key 去重,保留填写顺序。
+   - 已有部署升级时也必须先设置此变量。`DAILY_RESTART_ENABLED="false"` 不会关闭所选工作区原有的自动唤醒。
+4. **Actions → Keepalive Setup → Run workflow**(会校验密钥和指定工作区,然后触发部署)
+5. 完成后验证:`https://<KEEPALIVE_DOMAIN>/heart/<spaceKey>` 返回 `{"evict":false,...}` 即保活生效
 
 ## 启用真正的每日停启（可选，默认关闭）
 
@@ -80,13 +86,13 @@
 
 ## 工作方式
 
-- **spaceKey 不用手填**:部署时用腾讯云密钥调 `DescribeWorkspaces` 自动发现账号下全部工作区
+- **显式限定保活范围**:部署时用腾讯云密钥调 `DescribeWorkspaces` 只读校验仓库变量 `SPACE_KEYS`,仅将其中指定的有效工作区写入 Worker;不会自动追加新建或已关机的其他工作区。`/status` 的全账号只读查询不受此部署范围限制
 - **Global API Key 不直接部署**:Actions 运行时用它铸一个仅限本 zone 的临时 API token,部署完自动删除;Worker 长期运行只需 SecretId/Key
 - **显式启用的每日维护**:`DAILY_RESTART_ENABLED="true"` 才执行 Stop → 等待 STOPPED → Run → 等待 RUNNING。每个状态确认阶段最多等待 90 秒,约每 5 秒检查一次,单次 API 请求最多 15 秒;使用 Cron 的 `scheduledTime` 定位维护槽位。RUNNING 只说明平台状态,不代表业务健康或 IDE 凭据已刷新
 - **关机自动唤醒**(`tryWake`):心跳链失败(铸 token 抛错、心跳非 200、或 body 报 `evict:true`)后,每逢分钟数可被 5 整除时查 `DescribeWorkspaces`,**状态明确是关机才**尝试 `RunWorkspace`;已回收、未知、运行中或过渡状态不动。API 不可用时不能保证 5 分钟内恢复。此行为不受每日维护开关控制,手动关机仍可能被唤醒
 - **`/status` 端点**:`https://<KEEPALIVE_DOMAIN>/status` 只读查全部工作区状态(排查用)
 - **免 SSH 打开网页 IDE**(`vps-boot.yml`,手动触发):Actions 用腾讯云密钥铸 workspace token(~10 分钟有效),runner Chrome 打开 tty 页面——工作区装有 `/workspace/.vscode/preview.yml` 时触发 autoOpen 启动链;配套 `ide-exec.js` 终端通道(打开 `https://<KEEPALIVE_DOMAIN>` 根路径,Worker 自动选工作区并 302 进网页终端;多工作区用 `/ide/<spaceKey>` 精确指定)可免 SSH 执行任意命令读回输出。曾经每小时定时跑,因 GitHub Actions schedule 丢槽严重(实测 ~48 槽只 fire ~11 次)且保活实测只靠心跳就够,已改为纯手动——需要时 Actions 里 Run workflow 即可
-- **改代码后再部署**:push 到 `main` 且修改 `worker/**` 会自动部署;修复分支只跑 CI,不会部署。也可手动 Run workflow
+- **改代码后再部署**:push 到 `main` 且修改 `worker/**`、部署工作流或工作区校验脚本会自动部署;修复分支只跑 CI,不会部署。也可手动 Run workflow
 
 ## 目录结构
 
@@ -96,7 +102,7 @@ worker/
   wrangler.toml       cron 每分钟;需要 global_fetch_strictly_public
 .github/
   scripts/cf-token.py     Global Key → 临时 token + zone/account 自动发现
-  scripts/tc-discover.py  腾讯云密钥 → spaceKey 自动发现
+  scripts/tc-discover.py  腾讯云密钥 → 校验 SPACE_KEYS 显式部署范围
   scripts/tc-wtoken.py    腾讯云密钥 → workspace token 铸造(TC3,~10 分钟有效,免 SSH 打开网页 IDE)
   scripts/open-ide.js     用 runner Chrome 打开网页 IDE(有 preview.yml 则触发 autoOpen)
   scripts/ide-exec.js     网页终端执行器:铸 token → 打开 IDE → 终端执行命令读回输出,免 SSH
@@ -107,6 +113,7 @@ worker/
   workflows/ci.yml        push 语法 lint + Worker/启动安装器回归测试
 tests/
   worker.test.mjs         模拟 API 的 Worker 行为测试,不操作线上工作区
+  test_tc_discover.py      部署范围校验与输出回归测试,不调用云 API
 docs/
   maintenance.md         每日维护验收、回退与 IDE 预览排障
 ```

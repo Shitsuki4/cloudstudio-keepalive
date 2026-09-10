@@ -8,7 +8,7 @@ compatibility_flags = ["global_fetch_strictly_public"]
 crons = ["* * * * *"]
 
 # 非敏感 Vars 由 deploy.yml 自动写入:
-#   SPACE_KEYS    逗号分隔的空间 key,如 "spacekey1,spacekey2"
+#   SPACE_KEYS    必填仓库 Actions 变量,经校验后写入;仅保活明确选中的空间
 #   KEEPALIVE_HOST  worker 入口域名,如 "https://keepalive.example.com"
 # Secrets 由 deploy.yml 自动写入(TENCENT_SECRET_ID / TENCENT_SECRET_KEY)
 [vars]

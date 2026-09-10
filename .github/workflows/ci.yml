@@ -30,5 +30,5 @@ jobs:
               ast.parse(script.read_text(encoding='utf-8'), filename=str(script))
               print('OK', script)
           PY
-      - name: 启动安装器测试
+      - name: 部署范围与启动安装器测试
         run: python3 -m unittest discover -s tests -v

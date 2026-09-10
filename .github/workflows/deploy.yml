@@ -8,6 +8,7 @@ on:
     paths:
       - "worker/**"
       - ".github/workflows/deploy.yml"
+      - ".github/scripts/tc-discover.py"
 
 concurrency:
   group: keepalive-deploy
@@ -22,12 +23,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── 0. 用腾讯云密钥自动发现 spaceKey ──
-      - name: 自动发现工作区 spaceKey
+      # ── 0. 只读发现并校验显式 SPACE_KEYS；缺配置时停止部署 ──
+      - name: 校验部署工作区 SPACE_KEYS
         id: discover
         env:
           TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
           TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          SPACE_KEYS: ${{ vars.SPACE_KEYS }}
         run: python3 .github/scripts/tc-discover.py
 
       # ── 1. Global API Key → 铸临时 token + 自动发现 account/zone ──
