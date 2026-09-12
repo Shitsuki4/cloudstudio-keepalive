@@ -1,0 +1,144 @@
+name: Keepalive Deploy
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "worker/**"
+      - ".github/workflows/deploy.yml"
+      - ".github/scripts/tc-discover.py"
+
+concurrency:
+  group: keepalive-deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy-worker:
+    name: Cloudflare Worker + 自定义域路由
+    runs-on: ubuntu-latest
+    outputs:
+      space_first: ${{ steps.discover.outputs.first }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 0. 只读发现并校验显式 SPACE_KEYS；缺配置时停止部署 ──
+      - name: 校验部署工作区 SPACE_KEYS
+        id: discover
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          SPACE_KEYS: ${{ vars.SPACE_KEYS }}
+        run: python3 .github/scripts/tc-discover.py
+
+      # ── 1. Global API Key → 铸临时 token + 自动发现 account/zone ──
+      - name: 铸临时 CF token(Global Key 方式)
+        id: mint
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+        run: python3 .github/scripts/cf-token.py
+
+      - name: 解析入口域名
+        id: host
+        env:
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+        run: echo "host=https://${KEEPALIVE_DOMAIN#https://}" >> "$GITHUB_OUTPUT"
+
+      - name: 写入 wrangler vars
+        working-directory: worker
+        env:
+          SPACE_KEYS: ${{ steps.discover.outputs.space_keys }}
+          KEEPALIVE_HOST: ${{ steps.host.outputs.host }}
+        run: |
+          cat >> wrangler.toml <<EOF
+          SPACE_KEYS = "${SPACE_KEYS}"
+          KEEPALIVE_HOST = "${KEEPALIVE_HOST}"
+          EOF
+          echo "--- wrangler.toml ---"; cat wrangler.toml
+
+      - name: 部署 Worker
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.mint.outputs.token }}
+        run: npx --yes wrangler@latest deploy
+
+      - name: 写入 Worker Secrets(腾讯云密钥)
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.mint.outputs.token }}
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          BROWSERLESS_KEY: ${{ secrets.BROWSERLESS_KEY }}
+        run: |
+          echo -n "$TENCENT_SECRET_ID"  | npx --yes wrangler@latest secret put TENCENT_SECRET_ID
+          echo -n "$TENCENT_SECRET_KEY" | npx --yes wrangler@latest secret put TENCENT_SECRET_KEY
+          [ -n "$BROWSERLESS_KEY" ] && echo -n "$BROWSERLESS_KEY" | npx --yes wrangler@latest secret put BROWSERLESS_KEY || true
+
+      - name: 绑定自定义域路由(workers.dev 被污染,必须自定义域)
+        env:
+          CF_API_TOKEN: ${{ steps.mint.outputs.token }}
+          CF_ZONE_ID: ${{ steps.mint.outputs.zone_id }}
+          CF_ACCOUNT_ID: ${{ steps.mint.outputs.account_id }}
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+        run: bash .github/scripts/bind-route.sh
+
+      - name: 验证心跳入口(TC3 签名)
+        env:
+          HOST: ${{ steps.host.outputs.host }}
+          SPACE: ${{ steps.discover.outputs.first }}
+        run: |
+          echo "--- GET $HOST/heart/$SPACE ---"
+          # 刚建的 proxied DNS 记录要几十秒才可解析(exit 6),重试到 2 分钟
+          code=000
+          for i in $(seq 1 12); do
+            # curl DNS 未解析(exit 6)时 set -e 会提前杀脚本,故 `|| code=000` 兜底让重试循环真正生效
+            code=$(curl -s -o /tmp/heart.json -w "%{http_code}" --max-time 30 "$HOST/heart/$SPACE" 2>/dev/null) || code=000
+            echo "try $i: HTTP $code"
+            [ "$code" = "200" ] && break
+            sleep 10
+          done
+          head -c 400 /tmp/heart.json; echo
+          if [ "$code" != "200" ]; then echo "❌ 心跳失败:检查 TENCENT_SECRET_ID/KEY 与 spaceKey 是否匹配"; exit 1; fi
+
+      - name: 清理临时 token
+        if: always()
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+          TOKEN_ID: ${{ steps.mint.outputs.token_id }}
+        run: |
+          [ -n "$TOKEN_ID" ] || { echo "no token to clean"; exit 0; }
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+            -H "X-Auth-Email: $CF_AUTH_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_API_KEY" \
+            "https://api.cloudflare.com/client/v4/user/tokens/$TOKEN_ID")
+          echo "delete temp token: HTTP $code"
+
+  summary:
+    name: 部署摘要
+    runs-on: ubuntu-latest
+    needs: [deploy-worker]
+    if: always()
+    steps:
+      - name: 输出结果
+        run: |
+          echo "## 部署结果" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 步骤 | 状态 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Cloudflare Worker | ${{ needs.deploy-worker.result }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  cleanup-summary:
+    name: 说明
+    runs-on: ubuntu-latest
+    needs: [deploy-worker]
+    if: always()
+    steps:
+      - run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## 说明
+          - 部署用的临时 CF token 已在部署后自动删除,只留 Global API Key 作为长期凭证
+          - spaceKey 由腾讯云密钥调 DescribeWorkspaces 自动发现,无需手填
+          EOF

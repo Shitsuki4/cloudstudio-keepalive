@@ -1,0 +1,6 @@
+date -u; uptime
+ps -eo pid,lstart,etime,cmd --sort=start_time | grep -Ei 'code-server|exthost|extension' | grep -v grep
+ls -la /root/.local/share/code-server/data/logs/ 2>/dev/null || echo NO_LOGS_DIR
+ls -la /root/.local/share/code-server/data/logs/*/ 2>/dev/null | head -50
+tail -40 /root/.local/share/code-server/data/logs/*/exthost2/remoteexthost.log 2>/dev/null || echo NO_EXTHOST_LOG
+ls -la /workspace/ /workspace/.vscode/ 2>&1

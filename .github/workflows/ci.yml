@@ -1,0 +1,34 @@
+name: keepalive
+on: [push]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: worker JS 语法检查
+        run: |
+          node --check worker/start.js
+          for script in .github/scripts/*.js; do node --check "$script"; done
+      - name: Worker 行为回归测试(模拟 API,不触碰线上)
+        run: node --test tests/worker.test.mjs
+      - name: bash 语法检查
+        run: |
+          for f in .github/scripts/*.sh startup/*.sh; do
+            bash -n "$f" && echo "OK $f"
+          done
+          grep -q 'supervisor' startup/boot.sh
+          grep -q 'keepalive-boot' startup/keepalive-boot.conf
+      - name: Python 语法检查
+        run: |
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+          for script in Path('.github/scripts').glob('*.py'):
+              ast.parse(script.read_text(encoding='utf-8'), filename=str(script))
+              print('OK', script)
+          PY
+      - name: 部署范围与启动安装器测试
+        run: python3 -m unittest discover -s tests -v

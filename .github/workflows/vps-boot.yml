@@ -1,0 +1,49 @@
+name: Keepalive IDE Boot
+
+# 免 SSH 打开网页 IDE + 终端通道(手动 dispatch 触发,不再定时跑):
+#
+# 主通道:runner 自带 Chrome + 云 API 铸的 workspace token 打开 tty 页面
+#   → 工作区若装有 /workspace/.vscode/preview.yml 则触发 autoOpen 启动链(没装也无害,
+#     IDE 打开本身刷新活跃状态)。不依赖 browserless(付费)也不依赖 SSH accessToken(7 天轮换)
+# 终端通道(可选):通过 Worker 入口(根路径或 /ide/<space> 端点)打开网页终端,执行命令读回输出,
+#   可当免 SSH 的通用远程执行器用。失败不阻塞主通道
+#
+# 2026-09-05 移除每小时 schedule:GitHub Actions 对免费仓库的 schedule 丢槽严重
+# (实测 ~48 槽只 fire ~11 次),且保活实测只靠 Worker 每分钟心跳就足够,IDE 打开
+# 只是活跃度加成——与其依赖一条时跑时不跑的定时,不如需要时手动 Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  boot:
+    name: 打开网页 IDE + 终端自检(免 SSH)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 铸 workspace token(腾讯云密钥 TC3)
+        id: mint
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/tc-wtoken.py
+
+      - name: 打开网页 IDE(runner Chrome,免 browserless;有 preview.yml 则触发 autoOpen)
+        env:
+          SPACE: ${{ steps.mint.outputs.space }}
+          TOKEN: ${{ steps.mint.outputs.token }}
+        run: |
+          npm install --no-save puppeteer-core@23 > /dev/null 2>&1
+          node .github/scripts/open-ide.js "$SPACE" "$TOKEN" "$(which google-chrome)"
+
+      - name: 终端通道通用自检(应用无关,免 SSH,失败不阻塞)
+        id: ideexec
+        continue-on-error: true
+        env:
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+        run: |
+          DOMAIN="${KEEPALIVE_DOMAIN#https://}"
+          # 根路径即 IDE 入口(自动选第一个工作区),多工作区可用 https://$DOMAIN/ide/$SPACE 精确指定
+          node .github/scripts/ide-exec.js "https://$DOMAIN" "$(which google-chrome)" \
+            --cmd "date; uptime; df -h /workspace | tail -1; echo CHECK_\$((6*7))" \
+            --expect "CHECK_42"

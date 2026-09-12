@@ -1,0 +1,94 @@
+name: Keepalive Setup
+
+# 一次性引导:校验 Secrets,测试腾讯云密钥/CF Global Key 可用性,然后触发主部署
+on:
+  workflow_dispatch:
+    inputs:
+      initialize_startup:
+        description: 安装启动文件并注册原生钩子，不重启工作区
+        type: boolean
+        default: false
+      space_key:
+        description: 初始化目标，单工作区可留空
+        type: string
+        default: ""
+      lifecycle_baseline:
+        description: 当前 Lifecycle JSON；确认无旧钩子才填 {}，不要填写密钥
+        type: string
+        default: ""
+
+permissions:
+  actions: write # 触发 deploy.yml 需要
+  contents: read # checkout 需要(permissions 块会把未列出的权限置为 none,不能省)
+
+jobs:
+  check-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 检查原生启动配置基线
+        if: inputs.initialize_startup
+        env:
+          LIFECYCLE_BASELINE: ${{ inputs.lifecycle_baseline }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          sys.path.insert(0, '.github/scripts')
+          from lifecycle import normalize, with_startup
+          raw = os.environ['LIFECYCLE_BASELINE'].strip()
+          if not raw:
+              raise SystemExit('请先确认原生命周期配置；确认没有钩子时填写 {}，不自动覆盖未知配置')
+          with_startup(normalize(json.loads(raw)))
+          PY
+
+      - name: 校验必需 Secrets
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: |
+          missing=0
+          for v in CF_AUTH_EMAIL CF_GLOBAL_API_KEY KEEPALIVE_DOMAIN TENCENT_SECRET_ID TENCENT_SECRET_KEY; do
+            if [ -z "${!v}" ]; then echo "❌ 缺少 Secret: $v"; missing=1; else echo "✅ $v 已配置"; fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo ""
+            echo "👉 请到 Settings → Secrets and variables → Actions 补全后重新运行"
+            exit 1
+          fi
+
+      - name: 测试腾讯云密钥 + 校验部署工作区
+        id: discover
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          SPACE_KEYS: ${{ vars.SPACE_KEYS }}
+        run: python3 .github/scripts/tc-discover.py
+
+      - name: 测试 CF Global Key(找 zone)
+        env:
+          CF_AUTH_EMAIL: ${{ secrets.CF_AUTH_EMAIL }}
+          CF_GLOBAL_API_KEY: ${{ secrets.CF_GLOBAL_API_KEY }}
+        run: |
+          zones=$(curl -s -H "X-Auth-Email: $CF_AUTH_EMAIL" -H "X-Auth-Key: $CF_GLOBAL_API_KEY" \
+            "https://api.cloudflare.com/client/v4/zones?per_page=50")
+          ok=$(echo "$zones" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('success'));print(' '.join(z['name'] for z in d.get('result') or []))")
+          echo "$ok"
+          echo "$ok" | head -1 | grep -q True || { echo "❌ Global Key 无效"; exit 1; }
+
+  deploy:
+    needs: check-secrets
+    uses: ./.github/workflows/deploy.yml
+    secrets: inherit
+
+  initialize:
+    needs: deploy
+    if: inputs.initialize_startup
+    uses: ./.github/workflows/initialize-startup.yml
+    with:
+      space_key: ${{ inputs.space_key }}
+      lifecycle_baseline: ${{ inputs.lifecycle_baseline }}
+    secrets: inherit

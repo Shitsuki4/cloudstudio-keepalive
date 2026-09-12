@@ -1,0 +1,143 @@
+name: Keepalive Startup Setup
+
+on:
+  workflow_call:
+    inputs:
+      space_key:
+        type: string
+        default: ""
+      lifecycle_baseline:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      space_key:
+        description: 初始化目标，单工作区可留空
+        type: string
+        default: ""
+      lifecycle_baseline:
+        description: 当前 Lifecycle JSON；确认无旧钩子才填 {}，不要填写密钥
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: keepalive-startup-setup
+  cancel-in-progress: false
+
+jobs:
+  initialize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 准备钩子备份与变更计划，不修改空间
+        id: plan
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+          LIFECYCLE_BASELINE: ${{ inputs.lifecycle_baseline }}
+          SPACE: ${{ inputs.space_key }}
+        run: python3 .github/scripts/lifecycle.py prepare --space "$SPACE" --plan "$RUNNER_TEMP/lifecycle-plan.json"
+
+      - name: 保存回滚文件
+        uses: actions/upload-artifact@v4
+        with:
+          name: lifecycle-backup-${{ steps.plan.outputs.space }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/lifecycle-plan.json
+          retention-days: 7
+
+      - name: 准备安装命令
+        id: prepare_install
+        run: |
+          npm install --prefix "$RUNNER_TEMP/browser" --no-save --package-lock=false puppeteer-core@23
+          python3 .github/scripts/prepare-startup.py --output "$RUNNER_TEMP/install-startup.txt" --rollback-output "$RUNNER_TEMP/rollback-startup.txt"
+
+      - name: 保存文件回滚命令
+        if: always() && steps.prepare_install.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: startup-rollback-${{ steps.plan.outputs.space }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rollback-startup.txt
+          retention-days: 7
+
+      - name: 安装启动文件与 supervisor include，保留已有预览配置
+        id: install
+        continue-on-error: true
+        env:
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+          SPACE: ${{ steps.plan.outputs.space }}
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+        run: |
+          DOMAIN="${KEEPALIVE_DOMAIN#https://}"
+          DOMAIN="${DOMAIN%/}"
+          node .github/scripts/ide-exec.js "https://$DOMAIN/ide/$SPACE" "$(command -v google-chrome)" \
+            --file "$RUNNER_TEMP/install-startup.txt" --expect KEEPALIVE_INSTALL_OK
+
+      - name: 注册 Lifecycle.Start，不执行开关机
+        id: apply
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        env:
+          TENCENT_SECRET_ID: ${{ secrets.TENCENT_SECRET_ID }}
+          TENCENT_SECRET_KEY: ${{ secrets.TENCENT_SECRET_KEY }}
+        run: python3 .github/scripts/lifecycle.py apply --plan "$RUNNER_TEMP/lifecycle-plan.json"
+
+      - name: 安装失败时输出状态
+        if: always() && steps.install.outcome != 'success'
+        run: |
+          printf '## 初始化未完成\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' '- 启动文件安装或 marker 校验失败；Lifecycle.Start 未执行。' >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' '- 远端文件状态无法由本步骤宣称，请使用已保存的 rollback 命令人工核对。' >> "$GITHUB_STEP_SUMMARY"
+          exit 1
+
+      - name: Lifecycle 明确拒绝时回滚启动文件
+        id: rollback
+        if: steps.apply.outcome == 'failure' && steps.apply.outputs.result == 'rejected'
+        continue-on-error: true
+        env:
+          KEEPALIVE_DOMAIN: ${{ secrets.KEEPALIVE_DOMAIN }}
+          SPACE: ${{ steps.plan.outputs.space }}
+          NODE_PATH: ${{ runner.temp }}/browser/node_modules
+        run: |
+          DOMAIN="${KEEPALIVE_DOMAIN#https://}"
+          DOMAIN="${DOMAIN%/}"
+          node .github/scripts/ide-exec.js "https://$DOMAIN/ide/$SPACE" "$(command -v google-chrome)" \
+            --file "$RUNNER_TEMP/rollback-startup.txt" --expect KEEPALIVE_ROLLBACK_OK
+
+      - name: Lifecycle 失败时终止工作流
+        if: always() && steps.apply.outcome == 'failure'
+        run: |
+          printf '## 初始化失败\n\n' >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.apply.outputs.result }}" = "rejected" ]; then
+            if [ "${{ steps.rollback.outcome }}" = "success" ]; then
+              printf '%s\n' '- Lifecycle.Start 被明确拒绝；启动文件已回滚。' >> "$GITHUB_STEP_SUMMARY"
+            else
+              printf '%s\n' '- Lifecycle.Start 被明确拒绝，但文件回滚失败；文件和 Lifecycle 可能不一致。' >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            printf '%s\n' '- Lifecycle.Start 未得到可确认的接受或拒绝结果；未自动回滚文件。文件和 Lifecycle 可能不一致，请先人工检查。' >> "$GITHUB_STEP_SUMMARY"
+          fi
+          exit 1
+
+      - name: 输出初始化状态
+        env:
+          SPACE: ${{ steps.plan.outputs.space }}
+        run: |
+          printf '## 原生启动配置已提交\n\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- 工作区：`%s`\n' "$SPACE" >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- 已安装启动框架、持久与运行时 supervisor include；服务脚本放在 `/workspace/.keepalive/start.d/*.sh`。\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- `KEEPALIVE_INSTALL_OK` 仅证明文件事务成功，不证明 supervisor 已读取配置或钩子已经执行。\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- 未重启、未证明钩子已执行；需维护窗口进行真正停启验收。\n' >> "$GITHUB_STEP_SUMMARY"
+          printf -- '- 请下载 Lifecycle 基线和文件 rollback 命令并长期保存，Actions 仅保留 7 天。\n' >> "$GITHUB_STEP_SUMMARY"
