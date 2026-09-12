@@ -2,7 +2,7 @@
 
 > 腾讯 CloudStudio 免费工作区 24 小时保活方案：Cloudflare Worker 定时心跳 + GitHub Actions browserless 自动唤醒。
 
-[![部署状态](https://img.shields.io/badge/部署-一键部署-blue)](./DEPLOYMENT.md)
+[![部署状态](https://img.shields.io/badge/部署-一键部署-blue)](./DEPLOYMENT_GUIDE.md)
 [![许可证](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
 
 ## ✨ 核心特性
@@ -20,11 +20,11 @@
 ### 方式一：一键部署（推荐）
 
 1. **Fork 本仓库**
-2. **配置密钥** — 参考 [完整部署指南](./DEPLOYMENT.md)
+2. **配置密钥** — 参考 [完整部署指南](./DEPLOYMENT_GUIDE.md)
 3. **触发部署** — Actions → `Deploy Worker` → `Run workflow`
 4. **验证部署** — 访问 `https://your-domain.com/status`
 
-详细步骤请查看：**[📖 完整部署指南](./DEPLOYMENT.md)**
+详细步骤请查看：**[📖 完整部署指南](./DEPLOYMENT_GUIDE.md)**
 
 ### 方式二：快速配置清单
 
@@ -186,13 +186,13 @@ Worker 会依次为每个工作区发送心跳。
 3. 访问 [腾讯云控制台](https://console.cloud.tencent.com/cloudstudio) 确认工作区状态
 4. 查看 Cloudflare Worker 日志（Dashboard → Workers → Logs）
 
-更多排查步骤请查看：**[部署指南 - 故障排查](./DEPLOYMENT.md#故障排查)**
+更多排查步骤请查看：**[部署指南 - 故障排查](./DEPLOYMENT_GUIDE.md#故障排查)**
 
 ---
 
 ## 📖 文档索引
 
-- **[完整部署指南](./DEPLOYMENT.md)** — 从零开始的详细部署步骤
+- **[完整部署指南](./DEPLOYMENT_GUIDE.md)** — 从零开始的详细部署步骤
 - **[Secrets 配置指南](./setup-secrets.md)** — GitHub Secrets/Variables 配置说明
 
 ---
