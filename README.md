@@ -246,6 +246,7 @@ curl https://your-subdomain.your-domain.com/status | jq .
 
 - **[完整部署指南](./DEPLOYMENT_GUIDE.md)** — 从零开始的详细部署步骤
 - **[CloudStudio 通用服务部署](./CLOUDSTUDIO_DEPLOYMENT.md)** — 在 CloudStudio 中部署任意服务的最佳实践
+- **[CloudStudio 部署踩坑实录](./CLOUDSTUDIO_PITFALLS.md)** — 实测验证的坑：重启语义、启动链、按进程名杀进程的连环坑
 - **[GitHub Secrets 配置](./setup-secrets.md)** — Secrets/Variables 配置详解
 
 ---
