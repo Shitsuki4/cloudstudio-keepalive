@@ -197,21 +197,49 @@ exit 1
 
 **为什么内存是真危险的那一项：** 容器 cgroup 的 `memory.oom.group = 1`（pod 层是 0）表示 OOM 时内核**一次性杀掉容器内全部进程**，包括 PID1 `supervisord`：容器当场消失，工作区被判为停止。这才是"重启"的真实路径——不是平台按阈值重启，而是内存爆掉自崩。
 
-**实测余量（同一时刻）：**
+**⚠️ 怎么估余量：看 `anon`，不要看 `memory.current`。**
 
-- `jqtwjs`：`memory.current` 1.51 GB / 2 GiB（**78.5%**），RSS 合计 1608 MB，其中 IDE 的 node 进程约 610 + 230 + 68 MB，**new-api 仅约 100 MB**
-- `cuzdls`：1.15–1.69 GB / 2 GiB，RSS 合计 1011 MB，几乎全是 IDE 的 node
+`memory.current` 把**可回收的页缓存**也算进去，而内核会把空闲内存填成缓存，所以健康的容器上它常年贴着 `memory.max`——大号实测 **99.5%**（其中 `file` 172 MB 全是可回收的），但**一次都没被 OOM 杀过**。拿它估余量只会得出"随时要炸"的错觉。真正的判据是：
 
-**推论（定预算时按这个算，别按 2 GiB 算）：** 内存基本被**网页 IDE 自己**吃掉，工作区内的服务实际只有 **0.3–0.8 GiB** 可支配。一个吃 500 MB 的进程就足以把整个容器——连同 keepalive 框架和探针——一起带走。
+- `memory.stat` 的 **`anon`** —— 匿名内存，**不可回收**，这才是真正压着上限的部分
+- `memory.events` 的 **`oom_kill`** —— 历史上真的被全组连杀过几次（`0` 就是没发生过）
 
-**怎么自己读（容器内一行）：**
+2026-09-20 实测（大号容器已连续跑 **10 天**，小号 3.4 小时）：
+
+| | `jqtwjs`（大号） | `cuzdls`（小号） |
+|---|---|---|
+| `memory.current` | 2.138 GB（**99.5%**） | 约 1.2 GB |
+| `memory.stat` **`anon`** | **1.696 GB（79%）** | 656 MB（**31%**） |
+| `memory.stat` `file`（可回收） | 180 MB | 554 MB |
+| `memory.events` `oom_kill` | **0** | **0** |
+| 自家服务合计 | new-api 97 + cloudflared 37 + cf-probe 14 ≈ **148 MB** | cf-probe 13 MB |
+| 真正可支配（`max − anon`） | ≈ **0.4 GiB** | ≈ **1.4 GiB** |
+
+**推论（定预算按这个算，别按 2 GiB 算）：** 大号那 1.7 GB 匿名内存几乎全是**网页 IDE 的 node**，不是我们的服务——我们三家加起来才 148 MB。所以：
+
+- 单个自家服务预算 **≤ 200 MB**；整个 `start.d` 加起来 **≤ 300 MB**
+- Go 服务（如 new-api）用 **`GOMEMLIMIT`** 钉住堆上限，不要指望它自觉
+- 大号已经跑到 anon **79%**：再涨约 400 MB 就触发全组连杀，而这 400 MB 由 IDE 决定，**我们控制不了，只能监控**
+
+**⚠️ 不要用"预先杀掉自家服务"来防 OOM。** `oom.group=1` 是全组连杀，杀自家服务最多腾出 148 MB（7%），而真正吃内存的是 IDE；反而会在最需要服务的时候把它停掉。正确做法是**把自己的进程钉在预算内**，并盯住下面的判据。
+
+**运维判据：** `boot.log` 每次启动都会写一行
+
+```
+event=limits memory_anon=<anon> memory_file=<file> oom_kill=<n> budget=ok|tight|critical
+```
+
+`budget` 按 `anon / memory.max` 算：**≥85% `tight`**（去 IDE 那边减负：关掉多余编辑器窗口/扩展）、**≥92% `critical`**（下一波分配就可能全组连杀）。读不到 cgroup 时记 `unknown`，不阻断启动链。
+
+**怎么自己读（容器内）：**
 
 ```bash
 C="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"; \
   for f in cpu.max memory.max memory.swap.max memory.oom.group memory.current memory.peak; do \
-    echo "$f = $(cat "$C/$f" 2>/dev/null || echo NA)"; done
+    echo "$f = $(cat "$C/$f" 2>/dev/null || echo NA)"; done; \
+  grep -E '^(anon|file) ' "$C/memory.stat"; cat "$C/memory.events"
 ```
 
 **关键：容器没有 cgroup namespace**，直接读 `/sys/fs/cgroup/<文件>` 拿到的是**宿主机根 cgroup**（`cpu.stat` 的 `nr_periods` 是主机级、`memory.stat` 的 `file` 有几十 GB 就是这么来的），会得出"没有限制"的错误结论。必须拼上 `/proc/self/cgroup` 里 `0::` 后面的路径。
 
-`boot.sh` 每次启动都会把同一组数字写进 `boot.log`（`event=limits ...`），换容器后可直接对比余量。
+`boot.sh` 每次启动都会把同一组数字（含 `anon` / `oom_kill` / `budget`）写进 `boot.log`（`event=limits ...`），换容器后可直接对比余量。

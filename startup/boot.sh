@@ -152,12 +152,43 @@ cgroup_value() {
   printf '%s' "${value:-unknown}"
 }
 
+cgroup_stat_value() {
+  # memory.stat / memory.events are "key value" lines, not single-value files.
+  local value=""
+  value="$(awk -v want="$2" '$1 == want { print $2; exit }' "$1" 2>/dev/null || true)"
+  printf '%s' "${value:-unknown}"
+}
+
+memory_budget() {
+  # Judge headroom by anon, not by memory.current: the kernel fills free memory with
+  # reclaimable page cache, so memory.current sits just under memory.max on a perfectly
+  # healthy container and reading it as "almost out of memory" is simply wrong.
+  local maximum anonymous
+  maximum="$(cgroup_value "$1/memory.max")"
+  anonymous="$(cgroup_stat_value "$1/memory.stat" anon)"
+  case "$maximum$anonymous" in
+    *[!0-9]*) printf 'unknown'; return 0 ;;
+  esac
+  if [ "$maximum" -le 0 ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if [ "$anonymous" -ge $((maximum * 92 / 100)) ]; then
+    printf 'critical'
+  elif [ "$anonymous" -ge $((maximum * 85 / 100)) ]; then
+    printf 'tight'
+  else
+    printf 'ok'
+  fi
+}
+
 log_limits() {
   # Recorded every start: the numbers are the platform's, not ours, and nothing survives a
   # rebuild, so the log is the only place to compare headroom across containers.
   local directory disk
   directory="$(cgroup_directory)"
   log_event "event=limits cpu_max=$(cgroup_value "$directory/cpu.max" | tr ' ' '/') memory_max=$(cgroup_value "$directory/memory.max") memory_swap_max=$(cgroup_value "$directory/memory.swap.max") oom_group=$(cgroup_value "$directory/memory.oom.group") memory_current=$(cgroup_value "$directory/memory.current")"
+  log_event "event=limits memory_anon=$(cgroup_stat_value "$directory/memory.stat" anon) memory_file=$(cgroup_stat_value "$directory/memory.stat" file) oom_kill=$(cgroup_stat_value "$directory/memory.events" oom_kill) budget=$(memory_budget "$directory")"
   disk="$(df -Pk "$startup_dir" 2>/dev/null | awk 'NR == 2 { print $3 "/" $2 "KB" }' || true)"
   log_event "event=limits disk_used_total=${disk:-unknown}"
 }

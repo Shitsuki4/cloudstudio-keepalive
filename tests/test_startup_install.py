@@ -567,7 +567,11 @@ class BootScriptTests(unittest.TestCase):
         (limits / "memory.max").write_text("2147483648\n", encoding="utf-8")
         (limits / "memory.swap.max").write_text("0\n", encoding="utf-8")
         (limits / "memory.oom.group").write_text("1\n", encoding="utf-8")
-        (limits / "memory.current").write_text("1634299904\n", encoding="utf-8")
+        (limits / "memory.current").write_text("2138460160\n", encoding="utf-8")
+        (limits / "memory.stat").write_text(
+            "anon 1695854592\nfile 180092928\nslab 33672840\n", encoding="utf-8"
+        )
+        (limits / "memory.events").write_text("low 0\nmax 0\noom 0\noom_kill 0\n", encoding="utf-8")
         self.env["KEEPALIVE_CGROUP_DIR"] = str(limits)
         result = self.run_boot("manual")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -576,7 +580,48 @@ class BootScriptTests(unittest.TestCase):
         self.assertIn("memory_max=2147483648", log)
         self.assertIn("memory_swap_max=0", log)
         self.assertIn("oom_group=1", log)
+        self.assertIn("memory_anon=1695854592", log)
+        self.assertIn("memory_file=180092928", log)
+        self.assertIn("oom_kill=0", log)
+        # 1.696 GB / 2 GiB anon = 79%, below the 85% warning line
+        self.assertIn("budget=ok", log)
         self.assertIn("disk_used_total=", log)
+
+    def test_memory_budget_warns_when_anonymous_memory_gets_close_to_the_cap(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        limits = Path(self.temp.name) / "cgroup"
+        limits.mkdir()
+        (limits / "memory.max").write_text("1000\n", encoding="utf-8")
+        (limits / "memory.stat").write_text("anon 860\nfile 100\n", encoding="utf-8")
+        self.env["KEEPALIVE_CGROUP_DIR"] = str(limits)
+        result = self.run_boot("manual")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.managed / "logs" / "boot.log").read_text()
+        self.assertIn("budget=tight", log)
+
+    def test_memory_budget_reports_critical_near_the_cap(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        limits = Path(self.temp.name) / "cgroup"
+        limits.mkdir()
+        (limits / "memory.max").write_text("1000\n", encoding="utf-8")
+        (limits / "memory.stat").write_text("anon 925\nfile 40\n", encoding="utf-8")
+        self.env["KEEPALIVE_CGROUP_DIR"] = str(limits)
+        result = self.run_boot("manual")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.managed / "logs" / "boot.log").read_text()
+        self.assertIn("budget=critical", log)
+
+    def test_memory_budget_of_unlimited_or_unreadable_cgroup_is_unknown(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        limits = Path(self.temp.name) / "cgroup"
+        limits.mkdir()
+        (limits / "memory.max").write_text("max\n", encoding="utf-8")
+        (limits / "memory.stat").write_text("anon 1695854592\n", encoding="utf-8")
+        self.env["KEEPALIVE_CGROUP_DIR"] = str(limits)
+        result = self.run_boot("manual")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.managed / "logs" / "boot.log").read_text()
+        self.assertIn("budget=unknown", log)
 
     def test_unreadable_cgroup_directory_still_boots(self):
         shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
@@ -585,6 +630,7 @@ class BootScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         log = (self.managed / "logs" / "boot.log").read_text()
         self.assertIn("event=limits cpu_max=unknown", log)
+        self.assertIn("budget=unknown", log)
 
 
 if __name__ == "__main__":
