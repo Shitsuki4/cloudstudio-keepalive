@@ -21,7 +21,7 @@ jobs:
     outputs:
       space_first: ${{ steps.discover.outputs.first }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ── 0. 只读发现并校验显式 SPACE_KEYS；缺配置时停止部署 ──
       - name: 校验部署工作区 SPACE_KEYS

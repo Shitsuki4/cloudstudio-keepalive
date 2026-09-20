@@ -34,11 +34,11 @@ jobs:
     env:
       PYTHONDONTWRITEBYTECODE: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.11"
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "20"
 
@@ -52,7 +52,7 @@ jobs:
         run: python3 .github/scripts/lifecycle.py prepare --space "$SPACE" --plan "$RUNNER_TEMP/lifecycle-plan.json"
 
       - name: 保存回滚文件
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lifecycle-backup-${{ steps.plan.outputs.space }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/lifecycle-plan.json
@@ -66,7 +66,7 @@ jobs:
 
       - name: 保存文件回滚命令
         if: always() && steps.prepare_install.outcome == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: startup-rollback-${{ steps.plan.outputs.space }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/rollback-startup.txt

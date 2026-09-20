@@ -19,7 +19,7 @@ jobs:
     name: 打开网页 IDE + 终端自检(免 SSH)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: 铸 workspace token(腾讯云密钥 TC3)
         id: mint
