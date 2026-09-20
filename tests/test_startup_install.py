@@ -559,6 +559,33 @@ class BootScriptTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("unavailable or symlinked", result.stderr)
 
+    def test_records_container_resource_limits(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        limits = Path(self.temp.name) / "cgroup"
+        limits.mkdir()
+        (limits / "cpu.max").write_text("100000 100000\n", encoding="utf-8")
+        (limits / "memory.max").write_text("2147483648\n", encoding="utf-8")
+        (limits / "memory.swap.max").write_text("0\n", encoding="utf-8")
+        (limits / "memory.oom.group").write_text("1\n", encoding="utf-8")
+        (limits / "memory.current").write_text("1634299904\n", encoding="utf-8")
+        self.env["KEEPALIVE_CGROUP_DIR"] = str(limits)
+        result = self.run_boot("manual")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.managed / "logs" / "boot.log").read_text()
+        self.assertIn("cpu_max=100000/100000", log)
+        self.assertIn("memory_max=2147483648", log)
+        self.assertIn("memory_swap_max=0", log)
+        self.assertIn("oom_group=1", log)
+        self.assertIn("disk_used_total=", log)
+
+    def test_unreadable_cgroup_directory_still_boots(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        self.env["KEEPALIVE_CGROUP_DIR"] = str(Path(self.temp.name) / "absent")
+        result = self.run_boot("manual")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        log = (self.managed / "logs" / "boot.log").read_text()
+        self.assertIn("event=limits cpu_max=unknown", log)
+
 
 if __name__ == "__main__":
     unittest.main()

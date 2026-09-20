@@ -131,6 +131,37 @@ sync_runtime_include() {
   log_event "event=runtime_include_verified"
 }
 
+cgroup_directory() {
+  # Container caps live under the cgroup of PID 1, not at the cgroup root: the container
+  # shares the host's cgroup namespace, so /sys/fs/cgroup/<self path> is the only place
+  # where cpu.max / memory.max / memory.oom.group describe this workspace.
+  if [ -n "${KEEPALIVE_CGROUP_DIR:-}" ]; then
+    printf '%s' "$KEEPALIVE_CGROUP_DIR"
+    return 0
+  fi
+  local relative=""
+  if [ -r /proc/self/cgroup ]; then
+    relative="$(awk -F: '$1 == "0" { print $3; exit }' /proc/self/cgroup 2>/dev/null || true)"
+  fi
+  printf '%s' "/sys/fs/cgroup${relative}"
+}
+
+cgroup_value() {
+  local value=""
+  value="$(cat "$1" 2>/dev/null || true)"
+  printf '%s' "${value:-unknown}"
+}
+
+log_limits() {
+  # Recorded every start: the numbers are the platform's, not ours, and nothing survives a
+  # rebuild, so the log is the only place to compare headroom across containers.
+  local directory disk
+  directory="$(cgroup_directory)"
+  log_event "event=limits cpu_max=$(cgroup_value "$directory/cpu.max" | tr ' ' '/') memory_max=$(cgroup_value "$directory/memory.max") memory_swap_max=$(cgroup_value "$directory/memory.swap.max") oom_group=$(cgroup_value "$directory/memory.oom.group") memory_current=$(cgroup_value "$directory/memory.current")"
+  disk="$(df -Pk "$startup_dir" 2>/dev/null | awk 'NR == 2 { print $3 "/" $2 "KB" }' || true)"
+  log_event "event=limits disk_used_total=${disk:-unknown}"
+}
+
 if ! command -v flock >/dev/null 2>&1; then
   log_event "event=failed reason=flock_required"
   write_status "failed" || true
@@ -155,6 +186,7 @@ fi
 
 script_count=0
 log_event "event=started"
+log_limits
 if ! cd -- "$startup_dir/.."; then
   log_event "event=failed reason=workspace_unavailable"
   write_status "failed" || true

@@ -16,6 +16,7 @@
 - 只有 **STOP → RUN** 这条路径才会真正重建容器
 - RUNNING 状态下定时触发的 RunWorkspace 是 **no-op**，既不重建也不跑启动钩子
 - 因此"反正每天会自动恢复一次"**不能作为容错假设**，服务必须自己扛得住长期运行
+- 另一条真正会让容器消失的路径是**内存触顶被 OOM 全组连杀**，见第十节——它比"平台定时重启"更值得防
 
 ---
 
@@ -177,3 +178,40 @@ exit 1
 - **对超大单行压缩文件**（几十上百 KB 挤在一行）用 `grep -o` 抽取会卡死，先拉到本地再解析
 - **SSH 到工作区**：服务端只提供 keyboard-interactive，无需输入即通过。**不要加 `-o BatchMode=yes`**（直接 Permission denied）；非交互执行用 `ssh -o NumberOfPasswordPrompts=1 <target> "命令"`
 - **IDE 预览 URL 显示 `xxx-undefined-3000.undefined`**：预览 token 只在容器创建时注入，跑久了 API 返 401 导致扩展拼不出 URL。真实地址仍可用——网关**不校验中间段**，`https://<spaceKey>-<任意不含横杠的串>-<端口>.app.cloudstudio.work` 即可访问，且无鉴权。只有真正 Stop→Run 才会换新 token
+
+---
+
+## 十、容器资源限额（实测）：1 核 / 2 GiB 硬上限，内存打满是"全组连杀"
+
+免费工作区不是"用量到某个百分比就被平台重启"，而是被 cgroup **硬限**住。2026-09-20 在两个工作区（`jqtwjs` / `cuzdls`）实测，各项机制完全不同：
+
+| 项 | 实测值 | 超限后果 |
+|---|---|---|
+| CPU | `cpu.max = 100000 100000` → **1 核**（`cpu.weight=4`、`cpu.max.burst=0`） | **只被 throttle，永不重启** |
+| 内存 | `memory.max = 2147483648` → **2 GiB**；`memory.high=max`（无软限）；`memory.swap.max = 0`（**无 swap**） | 触顶 → cgroup OOM，而 **`memory.oom.group = 1` ⇒ 整组一起杀** |
+| 磁盘 | overlay **7.2 G 总量**（`/` 与 `/workspace` 是同一个 overlay） | 写满 → `ENOSPC`，服务写不进去；**不是重启** |
+| pids | `pids.max = 78643` | 正常用法撞不到 |
+| `nproc` / `free` | 32 核 / 62 GB —— **是宿主机的数** | 别拿它估容量 |
+
+**CPU 实测（30 秒单核打满）：** `nr_throttled` +151、`throttled_usec` +6.05 s，期间 uptime 连续、PID1 mtime 不变 —— 被限速，容器没重启。
+
+**为什么内存是真危险的那一项：** 容器 cgroup 的 `memory.oom.group = 1`（pod 层是 0）表示 OOM 时内核**一次性杀掉容器内全部进程**，包括 PID1 `supervisord`：容器当场消失，工作区被判为停止。这才是"重启"的真实路径——不是平台按阈值重启，而是内存爆掉自崩。
+
+**实测余量（同一时刻）：**
+
+- `jqtwjs`：`memory.current` 1.51 GB / 2 GiB（**78.5%**），RSS 合计 1608 MB，其中 IDE 的 node 进程约 610 + 230 + 68 MB，**new-api 仅约 100 MB**
+- `cuzdls`：1.15–1.69 GB / 2 GiB，RSS 合计 1011 MB，几乎全是 IDE 的 node
+
+**推论（定预算时按这个算，别按 2 GiB 算）：** 内存基本被**网页 IDE 自己**吃掉，工作区内的服务实际只有 **0.3–0.8 GiB** 可支配。一个吃 500 MB 的进程就足以把整个容器——连同 keepalive 框架和探针——一起带走。
+
+**怎么自己读（容器内一行）：**
+
+```bash
+C="/sys/fs/cgroup$(sed -n 's/^0:://p' /proc/self/cgroup)"; \
+  for f in cpu.max memory.max memory.swap.max memory.oom.group memory.current memory.peak; do \
+    echo "$f = $(cat "$C/$f" 2>/dev/null || echo NA)"; done
+```
+
+**关键：容器没有 cgroup namespace**，直接读 `/sys/fs/cgroup/<文件>` 拿到的是**宿主机根 cgroup**（`cpu.stat` 的 `nr_periods` 是主机级、`memory.stat` 的 `file` 有几十 GB 就是这么来的），会得出"没有限制"的错误结论。必须拼上 `/proc/self/cgroup` 里 `0::` 后面的路径。
+
+`boot.sh` 每次启动都会把同一组数字写进 `boot.log`（`event=limits ...`），换容器后可直接对比余量。
