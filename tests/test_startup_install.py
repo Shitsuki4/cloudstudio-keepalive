@@ -129,6 +129,27 @@ class StartupInstallerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "Invalid supervisord include rule"):
             installer.validate_supervisor_include(self.supervisor, target, self.config)
 
+    def test_creates_missing_supervisor_directory_when_include_rule_matches(self):
+        shutil.rmtree(self.supervisor)
+        self.install()
+        self.assertTrue((self.supervisor / "keepalive-boot.conf").is_file())
+
+    def test_refuses_missing_supervisor_directory_without_include_rule(self):
+        shutil.rmtree(self.supervisor)
+        self.config.write_text("[supervisord]\nnodaemon=true\n", encoding="utf-8")
+        with self.assertRaisesRegex(RuntimeError, "no \[include\] files rule"):
+            self.install()
+        self.assertFalse(self.supervisor.exists())
+
+    def test_refuses_missing_supervisor_directory_with_missing_parent(self):
+        missing = Path(self.temp.name) / "absent" / "supervisor"
+        self.config.write_text(
+            "[include]\nfiles = %s/*.conf\n" % missing.as_posix(), encoding="utf-8"
+        )
+        with self.assertRaisesRegex(RuntimeError, "Supervisor include parent is missing"):
+            installer.install(self.root, self.bundle, missing, supervisor_config=self.config)
+        self.assertFalse(missing.exists())
+
     def test_installs_and_records_all_managed_files(self):
         self.install()
         state = json.loads((self.root / ".keepalive" / "install-state.json").read_text(encoding="utf-8"))
@@ -519,6 +540,24 @@ class BootScriptTests(unittest.TestCase):
         self.assertIn("runtime_include_mismatch", (self.managed / "logs" / "boot.log").read_text())
         invalid = self.run_boot("bad")
         self.assertEqual(invalid.returncode, 2)
+
+    def test_missing_supervisor_directory_is_created(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        shutil.rmtree(self.supervisor)
+        result = self.run_boot("lifecycle")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (self.supervisor / "keepalive-boot.conf").read_bytes(),
+            (self.managed / "keepalive-boot.conf").read_bytes(),
+        )
+
+    def test_symlinked_supervisor_directory_is_rejected(self):
+        shutil.copy2(BOOT_PATH, self.managed / "boot.sh")
+        shutil.rmtree(self.supervisor)
+        self.supervisor.symlink_to(self.root)
+        result = self.run_boot("manual")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("unavailable or symlinked", result.stderr)
 
 
 if __name__ == "__main__":

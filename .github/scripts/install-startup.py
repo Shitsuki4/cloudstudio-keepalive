@@ -458,6 +458,27 @@ def validate_supervisor_include(supervisor_dir, target, supervisor_config=None):
     return config_path
 
 
+def ensure_supervisor_directory(supervisor_dir, target, supervisor_config=None):
+    """Create the include directory when supervisord already ships the include rule.
+
+    Freshly built containers carry the [include] line in supervisord.conf but not the
+    directory it points at. The include rule is what proves this is the right location,
+    so validate it first and only then create the missing directory.
+    """
+    supervisor_dir = Path(supervisor_dir)
+    validate_supervisor_include(supervisor_dir, target, supervisor_config)
+    if supervisor_dir.is_symlink():
+        raise RuntimeError("Supervisor include path is symlinked")
+    if supervisor_dir.exists():
+        if not supervisor_dir.is_dir():
+            raise RuntimeError("Supervisor include path is not a directory")
+        return
+    _validate_existing_chain(supervisor_dir.parent, "Supervisor include parent", leaf_directory=True)
+    _check_directory_access(supervisor_dir.parent, "Supervisor include parent", write=True)
+    supervisor_dir.mkdir(mode=0o755)
+    _check_directory_access(supervisor_dir, "Supervisor include path", write=True)
+
+
 def _new_backup_id():
     timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     return f"{timestamp}-{uuid.uuid4().hex[:12]}"
@@ -526,8 +547,8 @@ def install(root, bundle, supervisor_root=DEFAULT_SUPERVISOR_ROOT, supervisor_co
     targets = target_paths(root, supervisor_dir)
     state_path = managed / "install-state.json"
 
+    ensure_supervisor_directory(supervisor_dir, targets["supervisor-include.conf"], supervisor_config)
     validate_directories(root, managed, preview_dir, supervisor_dir, create=False)
-    validate_supervisor_include(supervisor_dir, targets["supervisor-include.conf"], supervisor_config)
     saved_state = snapshot(state_path)
     previous = read_state(state_path)
     previous_hashes = previous.get("hashes", {})

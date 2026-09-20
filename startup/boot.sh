@@ -25,7 +25,13 @@ fail_before_log() {
 
 [ -d "$startup_dir" ] && [ ! -L "$startup_dir" ] || fail_before_log "Startup directory is unavailable or symlinked"
 [ -f "$persistent_include" ] && [ ! -L "$persistent_include" ] || fail_before_log "Persistent supervisor include is unavailable or symlinked"
-[ -d "$supervisor_dir" ] && [ ! -L "$supervisor_dir" ] || fail_before_log "Supervisor include directory is unavailable or symlinked"
+if [ -L "$supervisor_dir" ] || { [ -e "$supervisor_dir" ] && [ ! -d "$supervisor_dir" ]; }; then
+  fail_before_log "Supervisor include directory is unavailable or symlinked"
+fi
+# Freshly built containers ship the supervisord [include] rule without the directory it
+# points at. This preflight runs before the log is opened, so aborting here is silent and
+# hides start.d entirely; create the directory instead and let the sync below report.
+mkdir -p -m 755 -- "$supervisor_dir" 2>/dev/null || true
 [ -f "$runtime_include" ] && [ ! -L "$runtime_include" ] || [ ! -e "$runtime_include" ] || fail_before_log "Runtime supervisor include is not a regular file"
 
 mkdir -p "$startup_dir/logs" "$startup_dir/start.d"
@@ -74,6 +80,10 @@ write_status() {
 sync_runtime_include() {
   local temporary
   local persistent_hash runtime_hash
+  if [ -L "$supervisor_dir" ] || [ ! -d "$supervisor_dir" ]; then
+    log_event "event=runtime_include_skipped reason=supervisor_dir_unavailable"
+    return 0
+  fi
   persistent_hash="$(sha256sum "$persistent_include" | awk '{print $1}')"
   if [ -e "$runtime_include" ]; then
     [ -f "$runtime_include" ] && [ ! -L "$runtime_include" ] || {
@@ -93,7 +103,10 @@ sync_runtime_include() {
     return 0
   fi
 
-  temporary="$(mktemp "$supervisor_dir/.keepalive-boot.XXXXXX")"
+  temporary="$(mktemp "$supervisor_dir/.keepalive-boot.XXXXXX")" || {
+    log_event "event=failed reason=runtime_include_tempfile"
+    return 1
+  }
   cat "$persistent_include" > "$temporary"
   chmod 600 "$temporary"
   if ln -- "$temporary" "$runtime_include" 2>/dev/null; then
